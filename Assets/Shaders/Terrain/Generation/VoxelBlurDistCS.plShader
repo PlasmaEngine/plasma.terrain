@@ -1,0 +1,62 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Generation/VoxelBakeConstants.h>
+
+/// Per-voxel packed data input (M³ uint32s, written by VoxelBakeCS). Lower 16 = SDF float16, upper 16 = strength float16.
+StructuredBuffer<uint>   BakedVoxelDistIn  BIND_GROUP(BG_DRAW_CALL);
+/// Blurred output — becomes the BakedVoxelDist that Pass1 reads.
+RWStructuredBuffer<uint> BakedVoxelDistOut BIND_GROUP(BG_DRAW_CALL);
+/// Packed voxel nibbles. Passed through unchanged — solid/air is determined solely by the dist sign.
+RWStructuredBuffer<uint>  BakedVoxels       BIND_GROUP(BG_DRAW_CALL);
+
+float ReadDist(int3 p, int M)
+{
+  p = clamp(p, int3(0, 0, 0), int3(M - 1, M - 1, M - 1));
+  return f16tof32(BakedVoxelDistIn[p.z * M * M + p.y * M + p.x] & 0xFFFFu);
+}
+
+[numthreads(4, 4, 4)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const int M = (int)GET_PUSH_CONSTANT(VoxelBakeConstants, VoxelResolution);
+  const int MP = M / 8;
+  const float blurWeight = saturate(GET_PUSH_CONSTANT(VoxelBakeConstants, SmoothFactor));
+
+  if ((int)DTid.x >= MP || (int)DTid.y >= M || (int)DTid.z >= M)
+    return;
+
+  // SmoothFactor push constant reused as blur weight (0 = passthrough, 1 = full blur).
+
+  uint packedIn  = BakedVoxels[DTid.z * M * MP + DTid.y * MP + DTid.x];
+  uint packedOut = 0u;
+
+  [unroll]
+  for (int i = 0; i < 8; ++i)
+  {
+    int3 p = int3((int)DTid.x * 8 + i, (int)DTid.y, (int)DTid.z);
+
+    float sum = 0.0;
+    [unroll] for (int dz = -1; dz <= 1; ++dz)
+    [unroll] for (int dy = -1; dy <= 1; ++dy)
+    [unroll] for (int dx = -1; dx <= 1; ++dx)
+      sum += ReadDist(p + int3(dx, dy, dz), M);
+
+    float avg      = sum * (1.0 / 27.0);
+    float distOrig = ReadDist(p, M);
+    float distOut  = lerp(distOrig, avg, blurWeight);
+
+    uint packedCenter = BakedVoxelDistIn[p.z * M * M + p.y * M + p.x];
+    BakedVoxelDistOut[p.z * M * M + p.y * M + p.x] = f32tof16(distOut) | (packedCenter & 0xFFFF0000u);
+
+    uint origNibble = (packedIn >> (i * 4)) & 0xFu;
+    packedOut |= (origNibble & 0xFu) << (i * 4);
+  }
+
+  BakedVoxels[DTid.z * M * MP + DTid.y * MP + DTid.x] = packedOut;
+}

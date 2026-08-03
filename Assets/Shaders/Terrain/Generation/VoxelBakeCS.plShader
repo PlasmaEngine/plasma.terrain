@@ -1,0 +1,270 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Generation/VoxelBakeConstants.h>
+#include <Shaders/Terrain/Generation/TerrainBrushData.h>
+#include <Shaders/Terrain/Generation/TerrainNoise.h>
+
+// 2D isosceles trapezoid SDF (Inigo Quilez).
+// p.x = horizontal offset (Y axis), p.y = vertical offset (Z axis).
+// r1 = half-width at bottom (p.y = -h), r2 = half-width at top (p.y = +h), h = half-height.
+// When r1 == r2 degenerates to a 2D box SDF.
+float sdTrapezoid(float2 p, float r1, float r2, float h)
+{
+  float2 k1 = float2(r2, h);
+  float2 k2 = float2(r2 - r1, 2.0 * h);
+  p.x = abs(p.x);
+  float2 ca = float2(p.x - min(p.x, (p.y < 0.0) ? r1 : r2), abs(p.y) - h);
+  float denom = dot(k2, k2);
+  float2 cb = p - k1 + k2 * clamp((denom > 1e-6) ? (dot(k1 - p, k2) / denom) : 0.0, 0.0, 1.0);
+  float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+  return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+}
+
+/// Packed voxel buffer: M³/8 uints where M = VoxelResolution. Each uint holds 8 4-bit voxel values.
+/// Bits [i*4+3 : i*4] = voxel at x=px*8+i for thread (px, y, z).
+/// Values 0-15: material index. Solid vs air is determined by the sign of BakedVoxelDist (negative = solid).
+/// M = VertexIdxPitch + 8 (always a multiple of 8). Includes a 4-voxel border on each side. Bound as UAV.
+RWStructuredBuffer<uint> BakedVoxels BIND_GROUP(BG_DRAW_CALL);
+
+/// Per-voxel packed data: M³ uint32s. Lower 16 bits = SDF as float16 (negative inside solid).
+/// Upper 16 bits = material strength as float16 (0 = main material, 1 = full override).
+RWStructuredBuffer<uint> BakedVoxelDist BIND_GROUP(BG_DRAW_CALL);
+
+/// All active terrain brushes for this frame. BrushCount entries are valid.
+StructuredBuffer<TerrainBrushData> Brushes BIND_GROUP(BG_DRAW_CALL);
+
+[numthreads(4, 4, 4)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const uint voxelResolution = GET_PUSH_CONSTANT(VoxelBakeConstants, VoxelResolution);
+  const uint vertexIdxPitch = GET_PUSH_CONSTANT(VoxelBakeConstants, VertexIdxPitch);
+  const float gridSpacing = GET_PUSH_CONSTANT(VoxelBakeConstants, GridSpacing);
+  const uint brushCount = GET_PUSH_CONSTANT(VoxelBakeConstants, BrushCount);
+  const uint initialSolid = GET_PUSH_CONSTANT(VoxelBakeConstants, InitialSolid);
+  const float fillHeight = GET_PUSH_CONSTANT(VoxelBakeConstants, FillHeight);
+  const float patchOriginX = GET_PUSH_CONSTANT(VoxelBakeConstants, PatchOriginX);
+  const float patchOriginY = GET_PUSH_CONSTANT(VoxelBakeConstants, PatchOriginY);
+  const float patchOriginZ = GET_PUSH_CONSTANT(VoxelBakeConstants, PatchOriginZ);
+
+  uint M  = voxelResolution; // total voxel buffer size including border (multiple of 8)
+  uint MP = M / 8u;          // packed width
+
+  if (DTid.x >= MP || DTid.y >= M || DTid.z >= M)
+    return;
+
+  uint Border = (M - vertexIdxPitch) / 2u; // border voxels on each side (= 4)
+  float VolumeHeight = (float)vertexIdxPitch * gridSpacing;
+
+  uint packed = 0u;
+
+  [unroll]
+  for (uint i = 0; i < 8; ++i)
+  {
+    uint x = DTid.x * 8 + i;
+
+    // Voxel center in volume-local space. The whole voxel grid is shifted by -0.5*GridSpacing so that
+    // the first inner voxel (buffer coord Border) maps to local -0.5*GridSpacing. Combined with the
+    // matching -0.5 offset in VoxelSurfaceNetsPass1CS, this places the produced surface-nets vertex
+    // grid flush with the volume's near edge (cell 0 vertex at local 0) and leaves a 2-voxel gap on
+    // the far edge (last vertex at (N-2)*GridSpacing for an N-voxel volume). Border voxels supply the
+    // ghost data that extends past the volume bounds on both sides.
+    float3 voxelCenter = (float3(float(x) - float(Border), float(DTid.y) - float(Border), float(DTid.z) - float(Border)) - 0.5) * gridSpacing;
+
+    float initialHeight;
+    uint solid;
+    float dist;
+    float matStrength = 0.0f;
+    if (initialSolid != 0u)
+    {
+      // FillHeight is local-space Z (converted from world-space on the CPU).
+      // Solid below FillHeight, air at or above.
+      initialHeight = fillHeight;
+      solid = 0u;
+      // Plane SDF: negative below fill height (inside solid).
+      dist = voxelCenter.z - fillHeight;
+    }
+    else
+    {
+      initialHeight = 0.0;
+      solid = 0u;
+      dist = 1e6; // empty — far from any surface until a brush contributes
+    }
+
+    [loop]
+    for (uint bi = 0; bi < brushCount; ++bi)
+    {
+      UNPACKUINT8(ModifyMode, MaterialIndex, HalfExtentZLow, HalfExtentZHigh, Brushes[bi].PackedModeMat);
+      // BrushMatStr: per-brush cap on material strength (0 = no material override, 1 = full override).
+      // Falloff: exponent for the 2D weight curve (unused for 3D brushes).
+      UNPACKHALF2(BrushMatStr, Falloff, Brushes[bi].PackedMatStrFalloff);
+      if ((ModifyMode == plTerrainModifyMode_OnlyPaint2D || ModifyMode == plTerrainModifyMode_OnlyPaint3D) && BrushMatStr <= 0.0)
+        continue;
+
+      UNPACKHALF2(HalfExtentX, HalfExtentYBottom, Brushes[bi].PackedExtents);
+      UNPACKHALF2(InnerRadius, OuterRadius, Brushes[bi].PackedRadii);
+
+      if (ModifyMode == plTerrainModifyMode_Carve || ModifyMode == plTerrainModifyMode_Add || ModifyMode == plTerrainModifyMode_OnlyPaint3D)  // 3D SDF modes
+      {
+        float HalfExtentZ = f16tof32((uint)HalfExtentZLow | ((uint)HalfExtentZHigh << 8));
+        float3 toVoxel3D = voxelCenter - Brushes[bi].Position;
+        float3 localP3D;
+        localP3D.x = dot(Brushes[bi].InvRotRow0.xyz, toVoxel3D);
+        localP3D.y = dot(Brushes[bi].InvRotRow1.xyz, toVoxel3D);
+        localP3D.z = dot(Brushes[bi].InvRotRow2.xyz, toVoxel3D);
+        // Trapezoid cross-section in the YZ plane, extruded along X.
+        // Y half-width tapers from HalfExtentYBottom at Z=-HalfExtentZ to HalfExtentYTop at Z=+HalfExtentZ.
+        // When both are equal this degenerates to the old symmetric rounded box.
+        float trapSdf = sdTrapezoid(float2(localP3D.y, localP3D.z), HalfExtentYBottom, Brushes[bi].HalfExtentYTop, HalfExtentZ);
+        float xDist = abs(localP3D.x) - HalfExtentX;
+        float sdf3D = length(max(float2(xDist, trapSdf), 0.0)) + min(max(xDist, trapSdf), 0.0) - InnerRadius;
+
+        // Brush noise on the 3D shape: fade by 1 - exp(-k*t) so the perturbation can't push
+        // the affected region past the original surface (envelope is 0 at sdf3D >= 0).
+        // Sampled at world XYZ for a global pattern shared with other brushes/volumes.
+        if (Brushes[bi].Noise > 0.0 && InnerRadius > 0.0 && abs(Brushes[bi].NoiseScale) > 0.0001)
+        {
+          float3 worldXYZ = voxelCenter + float3(patchOriginX, patchOriginY, patchOriginZ);
+          float n3 = FBM3D(worldXYZ / Brushes[bi].NoiseScale);
+          float tEdge = saturate(-sdf3D / InnerRadius);
+          float envelope = 1.0 - exp(-6.0 * tEdge);
+          sdf3D += n3 * envelope * Brushes[bi].Noise * InnerRadius;
+        }
+
+        if (ModifyMode == plTerrainModifyMode_Carve)
+        {
+          if (sdf3D <= 0.0f)
+          {
+            solid = MaterialIndex;
+            dist = max(dist, 100.0f); // carved: ensure clearly positive to prevent blur flip-back
+          }
+          else
+          {
+            dist = max(dist, -sdf3D);
+            // Paint material on solid border voxels within OuterRadius of the carved edge.
+            if (sdf3D < OuterRadius && dist <= 0.0f)
+            {
+              float s = BrushMatStr * saturate(1.0f - sdf3D / max(OuterRadius, 0.001f));
+              if (s > matStrength) { matStrength = s; solid = MaterialIndex; }
+            }
+          }
+        }
+        else if (ModifyMode == plTerrainModifyMode_Add)
+        {
+          float prevDist = dist;
+          dist = min(dist, sdf3D);
+          if (sdf3D <= 0.0f) // inside the brush
+          {
+            if (prevDist > 0.0f) solid = MaterialIndex; // air→solid transition
+            if (BrushMatStr > matStrength) { matStrength = BrushMatStr; solid = MaterialIndex; }
+          }
+        }
+        else // OnlyPaint3D: paint material on solid voxels without changing geometry
+        {
+          if (sdf3D < OuterRadius && dist <= 0.0f)
+          {
+            float s = BrushMatStr * saturate(1.0f - sdf3D / max(OuterRadius, 0.001f));
+            if (s > matStrength) { matStrength = s; solid = MaterialIndex; }
+          }
+        }
+        continue;
+      }
+
+      // Project voxel XY onto the brush's local Z=0 plane, identical to TerrainBakeStep1CS.
+      // dz is the Z offset that places the point on the brush plane; brushHeight = Position.z + dz.
+      float2 toVoxel = voxelCenter.xy - Brushes[bi].Position.xy;
+      float3 brushNormal = Brushes[bi].InvRotRow2.xyz;
+      float dz = (abs(brushNormal.z) > 0.001)
+                     ? -(brushNormal.x * toVoxel.x + brushNormal.y * toVoxel.y) / brushNormal.z
+                     : 0.0;
+      float3 delta3D = float3(toVoxel, dz);
+      float2 localP;
+      localP.x = dot(Brushes[bi].InvRotRow0.xyz, delta3D);
+      localP.y = dot(Brushes[bi].InvRotRow1.xyz, delta3D);
+
+      float2 q2 = abs(localP) - float2(HalfExtentX, HalfExtentYBottom);
+      float sdf = min(max(q2.x, q2.y), 0.0) + length(max(q2, float2(0.0, 0.0))) - OuterRadius - InnerRadius;
+
+      // Brush noise: perturb the 2D footprint sdf (faded near outer edge) and the brush
+      // height (full strength, so the surface inside the inner radius gets bumpy).
+      // Sampled at world XY for a global pattern.
+      float n = 0.0;
+      if (Brushes[bi].Noise > 0.0 && OuterRadius > 0.0 && abs(Brushes[bi].NoiseScale) > 0.0001)
+      {
+        float2 worldXY = voxelCenter.xy + float2(patchOriginX, patchOriginY);
+        n = FBM2D(worldXY / Brushes[bi].NoiseScale);
+        float tEdge = saturate(-sdf / OuterRadius);
+        float envelope = 1.0 - exp(-6.0 * tEdge);
+        sdf += n * envelope * Brushes[bi].Noise * OuterRadius;
+      }
+
+      if (sdf > 0.0)
+        continue;
+
+      float t = saturate(-sdf / OuterRadius);
+      float weight = pow(smoothstep(0.0, 1.0, t), Falloff);
+      float effectiveStrength = BrushMatStr * weight;
+
+      float brushHeight = Brushes[bi].Position.z + dz + n * Brushes[bi].Noise * OuterRadius;
+      float maxBoundary = lerp(initialHeight, brushHeight, weight); // fills from below
+      float minBoundary = lerp(VolumeHeight, brushHeight, weight);  // carves from above
+
+      // SDF of the brush's solid region = intersection of the 2D footprint (sdf) with the vertical half-space.
+      // Max fills below maxBoundary, Min carves above minBoundary, Set does both.
+      float addSdf = max(sdf, voxelCenter.z - maxBoundary);     // region added by Max (and Set)
+      float removedSdf = max(sdf, minBoundary - voxelCenter.z); // region removed by Min (and Set)
+
+      if (ModifyMode == plTerrainModifyMode_Max)       // Max: fill below brush
+      {
+        // Only assign material on air→solid transition here; existing solid uses effectiveStrength below.
+        if (voxelCenter.z <= maxBoundary && dist > 0.0f) solid = MaterialIndex;
+        dist = min(dist, addSdf);
+      }
+      else if (ModifyMode == plTerrainModifyMode_Min)  // Min: carve from above
+      {
+        if (voxelCenter.z > minBoundary)
+        {
+          solid = MaterialIndex;
+          dist = max(dist, max(-removedSdf, 100.0f)); // carved: ensure clearly positive
+        }
+        else
+        {
+          dist = max(dist, -removedSdf);
+        }
+      }
+      else if (ModifyMode == plTerrainModifyMode_Set)  // Set: fill below AND carve above
+      {
+        if (voxelCenter.z <= maxBoundary && dist > 0.0f) solid = MaterialIndex; // air→solid
+        if (voxelCenter.z > minBoundary)
+        {
+          solid = MaterialIndex; // carved: set to brush material
+          dist = max(dist, max(-removedSdf, 100.0f)); // ensure clearly positive
+        }
+        else
+        {
+          dist = min(dist, addSdf);
+          dist = max(dist, -removedSdf);
+        }
+      }
+
+      // Apply material strength: the brush with the highest effective strength wins.
+      // Never overwrite an existing solid voxel's material when effectiveStrength is zero.
+      if (dist <= 0.0f && effectiveStrength > matStrength)
+      {
+        matStrength = effectiveStrength;
+        solid = MaterialIndex;
+      }
+    }
+
+    packed |= (solid & 0xFu) << (i * 4);
+
+    BakedVoxelDist[DTid.z * M * M + DTid.y * M + x] = f32tof16(dist) | (f32tof16(matStrength) << 16u);
+  }
+
+  BakedVoxels[DTid.z * M * MP + DTid.y * MP + DTid.x] = packed;
+}

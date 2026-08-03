@@ -1,0 +1,151 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Generation/VoxelBakeConstants.h>
+#include <Shaders/Terrain/Generation/VoxelMeshConstants.h>
+
+/// Packed voxel input, read-only.
+StructuredBuffer<uint>              BakedVoxels BIND_GROUP(BG_DRAW_CALL);
+/// Per-voxel packed data (M³ uint32s). Lower 16 = SDF float16, upper 16 = strength float16.
+StructuredBuffer<uint>              BakedVoxelDist BIND_GROUP(BG_DRAW_CALL);
+/// Vertex buffer written by Pass 1 (SRV — Pass 1 UAV flush happens on rebind).
+StructuredBuffer<VoxelGpuVertex>    OutVertices BIND_GROUP(BG_DRAW_CALL);
+RWStructuredBuffer<uint>            OutIndices  BIND_GROUP(BG_DRAW_CALL);
+RWStructuredBuffer<VoxelMeshCounts> OutCounts   BIND_GROUP(BG_DRAW_CALL);
+
+// M = VoxelResolution (total buffer dimension including border, always divisible by 8).
+bool IsVoxelSolid(int3 pos, uint M)
+{
+  if (pos.x < 0 || pos.y < 0 || pos.z < 0) return false;
+  if ((uint)pos.x >= M || (uint)pos.y >= M || (uint)pos.z >= M) return false;
+  uint linearIdx = (uint)pos.z * M * M + (uint)pos.y * M + (uint)pos.x;
+  return f16tof32(BakedVoxelDist[linearIdx] & 0xFFFFu) <= 0.0f;
+}
+
+// All inner cells [0, N1-1] are valid. Border voxels supply accurate data so the
+// artificial inner exclusion from the clamped era is no longer needed.
+bool IsCellValid(int cx, int cy, int cz, uint N1)
+{
+  return (uint)cx < N1 && (uint)cy < N1 && (uint)cz < N1;
+}
+
+uint CellIdx(int cx, int cy, int cz, uint N1)
+{
+  return (uint)cz * N1 * N1 + (uint)cy * N1 + (uint)cx;
+}
+
+bool IsCellActive(uint idx)
+{
+  return OutVertices[idx].Material != 0xFFFFFFFFu;
+}
+
+[numthreads(4, 4, 4)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const uint N = GET_PUSH_CONSTANT(VoxelBakeConstants, VertexIdxPitch);  // inner resolution
+  const uint M = GET_PUSH_CONSTANT(VoxelBakeConstants, VoxelResolution); // total voxel buffer including border
+  const uint edgeAxis = GET_PUSH_CONSTANT(VoxelBakeConstants, EdgeAxis);
+  const uint N1 = N + 1u;          // cells per axis (matches Pass1)
+
+  if (DTid.x >= N1 || DTid.y >= N1 || DTid.z >= N1)
+    return;
+
+  int x = (int)DTid.x;
+  int y = (int)DTid.y;
+  int z = (int)DTid.z;
+
+  // Offset into extended voxel buffer space.
+  uint Border = (M - N) / 2u;
+  int  bx = x + (int)Border;
+  int  by = y + (int)Border;
+  int  bz = z + (int)Border;
+
+  // Determine the forward voxel position and the 4 cells sharing this edge.
+  int3 posA, posB;
+  int c0x, c0y, c0z;
+  int c1x, c1y, c1z;
+  int c2x, c2y, c2z;
+  int c3x, c3y, c3z;
+
+  if (edgeAxis == 0u)
+  {
+    // X-edge: (x,y,z) → (x+1,y,z). Valid when x < N-1.
+    if ((uint)x >= N1) return;
+    posA = int3(bx,   by, bz);
+    posB = int3(bx+1, by, bz);
+    // 4 cells: (x,y-1,z-1), (x,y,z-1), (x,y,z), (x,y-1,z)
+    c0x = x; c0y = y-1; c0z = z-1;
+    c1x = x; c1y = y;   c1z = z-1;
+    c2x = x; c2y = y;   c2z = z;
+    c3x = x; c3y = y-1; c3z = z;
+  }
+  else if (edgeAxis == 1u)
+  {
+    // Y-edge: (x,y,z) → (x,y+1,z). Valid when y < N-1.
+    if ((uint)y >= N1) return;
+    posA = int3(bx, by,   bz);
+    posB = int3(bx, by+1, bz);
+    // 4 cells: (x-1,y,z-1), (x,y,z-1), (x,y,z), (x-1,y,z)
+    c0x = x-1; c0y = y; c0z = z-1;
+    c1x = x;   c1y = y; c1z = z-1;
+    c2x = x;   c2y = y; c2z = z;
+    c3x = x-1; c3y = y; c3z = z;
+  }
+  else
+  {
+    // Z-edge: (x,y,z) → (x,y,z+1). Valid when z < N-1.
+    if ((uint)z >= N1) return;
+    posA = int3(bx, by, bz);
+    posB = int3(bx, by, bz+1);
+    // 4 cells: (x-1,y-1,z), (x,y-1,z), (x,y,z), (x-1,y,z)
+    c0x = x-1; c0y = y-1; c0z = z;
+    c1x = x;   c1y = y-1; c1z = z;
+    c2x = x;   c2y = y;   c2z = z;
+    c3x = x-1; c3y = y;   c3z = z;
+  }
+
+  bool solidA = IsVoxelSolid(posA, M);
+  bool solidB = IsVoxelSolid(posB, M);
+  if (solidA == solidB) return;
+
+  // Validate all 4 cells.
+  if (!IsCellValid(c0x, c0y, c0z, N1)) return;
+  if (!IsCellValid(c1x, c1y, c1z, N1)) return;
+  if (!IsCellValid(c2x, c2y, c2z, N1)) return;
+  if (!IsCellValid(c3x, c3y, c3z, N1)) return;
+
+  uint idxC0 = CellIdx(c0x, c0y, c0z, N1);
+  uint idxC1 = CellIdx(c1x, c1y, c1z, N1);
+  uint idxC2 = CellIdx(c2x, c2y, c2z, N1);
+  uint idxC3 = CellIdx(c3x, c3y, c3z, N1);
+
+  if (!IsCellActive(idxC0)) return;
+  if (!IsCellActive(idxC1)) return;
+  if (!IsCellActive(idxC2)) return;
+  if (!IsCellActive(idxC3)) return;
+
+  // Winding: (C0,C1,C2),(C0,C2,C3) is CCW for normal pointing in +axis direction.
+  // Y-axis (axis==1) has inverted handedness — flip when solid is at the low side.
+  // Other axes: flip when solid is at the high side.
+  bool flip = solidA ^ (edgeAxis != 1u);
+
+  uint basePrim;
+  InterlockedAdd(OutCounts[0].PrimitiveCount, 2u, basePrim);
+  uint baseIdx = basePrim * 3u;
+
+  if (!flip)
+  {
+    OutIndices[baseIdx + 0] = idxC0; OutIndices[baseIdx + 1] = idxC1; OutIndices[baseIdx + 2] = idxC2;
+    OutIndices[baseIdx + 3] = idxC0; OutIndices[baseIdx + 4] = idxC2; OutIndices[baseIdx + 5] = idxC3;
+  }
+  else
+  {
+    OutIndices[baseIdx + 0] = idxC0; OutIndices[baseIdx + 1] = idxC2; OutIndices[baseIdx + 2] = idxC1;
+    OutIndices[baseIdx + 3] = idxC0; OutIndices[baseIdx + 4] = idxC3; OutIndices[baseIdx + 5] = idxC2;
+  }
+}

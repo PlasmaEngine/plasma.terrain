@@ -1,0 +1,273 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+BLEND_MODE = BLEND_MODE_OPAQUE
+RENDER_PASS
+SHADING_MODE = SHADING_MODE_LIT
+TWO_SIDED = FALSE
+FLIP_WINDING = FALSE
+FORWARD_PASS_WRITE_DEPTH
+MSAA
+CAMERA_MODE
+SHADING_QUALITY
+MATERIAL_PREVIEW
+
+[MATERIALPARAMETER]
+
+Permutation BLEND_MODE;
+Permutation SHADING_MODE;
+Permutation TWO_SIDED;
+
+Texture2DArray LayerBaseTexture;
+Texture2DArray LayerNormalTexture;
+Texture2DArray LayerORMTexture;
+Texture2DArray LayerDisplacementTexture;
+
+bool UseDisplacementTexture;
+bool UseStochasticSampling;
+bool InvertOcclusion;
+float HeightScale @Default(0.0) @Clamp(0.0, 10.0);
+
+/// World-space scale applied to triplanar UVs. Smaller values tile the texture more coarsely.
+float TextureScale @Default(0.5) @Clamp(0.001, 100.0);
+
+float RoughnessBias @Default(0.0) @Clamp(-1.0, 1.0);
+float MetallicValue  @Default(0.0) @Clamp(0.0, 1.0);
+
+int2 Material0TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material1TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material2TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material3TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material4TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material5TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material6TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material7TextureIndex @Default(0) @Clamp(0, 255);
+
+[MATERIALCONFIG]
+
+#include <Shaders/Materials/MaterialConfig.h>
+
+[RENDERSTATE]
+
+#include <Shaders/Materials/MaterialState.h>
+
+[MATERIALCONSTANTS]
+
+FLOAT1(TextureScale);
+FLOAT1(RoughnessBias);
+FLOAT1(MetallicValue);
+FLOAT1(HeightScale);
+
+BOOL1(UseDisplacementTexture);
+BOOL1(UseStochasticSampling);
+BOOL1(InvertOcclusion);
+
+INT2(Material0TextureIndex);
+INT2(Material1TextureIndex);
+INT2(Material2TextureIndex);
+INT2(Material3TextureIndex);
+INT2(Material4TextureIndex);
+INT2(Material5TextureIndex);
+INT2(Material6TextureIndex);
+INT2(Material7TextureIndex);
+
+[SHADER]
+
+#define USE_NORMAL
+#define USE_TANGENT
+#define USE_TEXCOORD0
+#define USE_SIMPLE_MATERIAL_MODEL
+#define USE_FOG
+#define USE_DECALS
+#define NO_SCREEN_SPACE_TECHNIQUES // deactivate AO on terrain geometry
+
+[VERTEXSHADER]
+
+#define USE_WORLDPOS
+#define USE_DATAOFFSETS
+
+#if MATERIAL_PREVIEW
+
+#include <Shaders/Materials/MaterialVertexShader.h>
+
+VS_OUT main(VS_IN Input)
+{
+  return FillVertexData(Input);
+}
+
+#else
+
+#include <Shaders/Terrain/Rendering/VoxelTerrainVS.h>
+
+VS_OUT main(uint VertexID : SV_VertexID)
+{
+  return FillVoxelTerrainVertexOutput(VertexID);
+}
+
+#endif
+
+[PIXELSHADER]
+
+#define USE_MATERIAL_OCCLUSION
+
+#define CUSTOM_GLOBALS \
+  float3 TpWeights; \
+  float  Scale;     \
+  uint2  BaseTexIdx; \
+  uint2  OverTexIdx; \
+  float3 LayerSamplePosition;
+
+#include <Shaders/Materials/MaterialPixelShader.h>
+#include <Shaders/Terrain/Rendering/VoxelMeshRenderConstants.h>
+#include <Shaders/Terrain/Rendering/TerrainLayerSampling.h>
+
+Texture2DArray LayerBaseTexture BIND_GROUP(BG_MATERIAL);
+SamplerState LayerBaseTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2DArray LayerNormalTexture BIND_GROUP(BG_MATERIAL);
+SamplerState LayerNormalTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2DArray LayerORMTexture BIND_GROUP(BG_MATERIAL);
+SamplerState LayerORMTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2DArray LayerDisplacementTexture BIND_GROUP(BG_MATERIAL);
+SamplerState LayerDisplacementTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+static const min16uint NUM_TERRAIN_PARALLAX_STEPS = 24;
+static const float NUM_TERRAIN_PARALLAX_STEPS_RCP = 1.0 / NUM_TERRAIN_PARALLAX_STEPS;
+
+uint2 LookupTexIndices(uint matSlot)
+{
+  int2 MatTextureIndices[8] = { GetMaterialData(Material0TextureIndex), GetMaterialData(Material1TextureIndex), GetMaterialData(Material2TextureIndex), GetMaterialData(Material3TextureIndex), GetMaterialData(Material4TextureIndex), GetMaterialData(Material5TextureIndex), GetMaterialData(Material6TextureIndex), GetMaterialData(Material7TextureIndex) };
+  return MatTextureIndices[clamp(matSlot, 0u, 7u)];
+}
+
+float SampleVoxelTerrainDisplacement(float3 worldPos)
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  const float mainHeight = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic).r;
+  const float overrideHeight = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic).r;
+
+  return lerp(mainHeight, overrideHeight, matStrength);
+}
+
+float3 ComputeVoxelTerrainParallaxWorldPosition(float3 worldPos)
+{
+  float scale = GetMaterialData(HeightScale) * 0.01;
+  if (scale <= 0.0)
+    return worldPos;
+
+  float3 viewDirection = normalize(GetCameraPosition() - worldPos);
+  float ndotv = max(dot(G.Input.Normal, viewDirection), 0.15);
+  float3 tangentViewDirection = viewDirection - G.Input.Normal * dot(G.Input.Normal, viewDirection);
+
+  float tangentLengthSq = dot(tangentViewDirection, tangentViewDirection);
+  if (tangentLengthSq <= 0.0001)
+    return worldPos;
+
+  float3 parallaxDirection = -tangentViewDirection * rsqrt(tangentLengthSq);
+  float3 stepOffset = parallaxDirection * (scale / ndotv) * NUM_TERRAIN_PARALLAX_STEPS_RCP;
+
+  float3 currentWorldPos = worldPos;
+  float currentLayerHeight = 0.0;
+  float heightFromTexture = 1.0 - SampleVoxelTerrainDisplacement(currentWorldPos);
+
+  [loop]
+  for (min16uint iter = 0; iter < NUM_TERRAIN_PARALLAX_STEPS && heightFromTexture > currentLayerHeight; ++iter)
+  {
+    currentLayerHeight += NUM_TERRAIN_PARALLAX_STEPS_RCP;
+    currentWorldPos += stepOffset;
+    heightFromTexture = 1.0 - SampleVoxelTerrainDisplacement(currentWorldPos);
+  }
+
+  return currentWorldPos;
+}
+
+void FillCustomGlobals()
+{
+  // Use the smooth interpolated normal, not a face normal derived from screen-space derivatives
+  // (cross(ddx, ddy)). A face normal produces piecewise-constant weights, which shows as
+  // visible faceting at triangle edges even when the shading normal is smooth.
+  G.TpWeights = TriplanarWeights(G.Input.Normal);
+  G.Scale = GetMaterialData(TextureScale);
+
+  G.BaseTexIdx = LookupTexIndices(GET_PUSH_CONSTANT(VoxelMeshRenderConstants, BaseMaterialIndex));
+  G.OverTexIdx = LookupTexIndices(G.Input.DataOffsets.y);
+
+  // Downward-facing surfaces use the side texture for the Z projection instead of the top texture.
+  if (G.Input.Normal.z < 0.0)
+  {
+    G.BaseTexIdx = G.BaseTexIdx.yy;
+    G.OverTexIdx = G.OverTexIdx.yy;
+  }
+
+  G.LayerSamplePosition = G.Input.WorldPosition;
+  if (GetMaterialData(UseDisplacementTexture))
+  {
+    G.LayerSamplePosition = ComputeVoxelTerrainParallaxWorldPosition(G.LayerSamplePosition);
+  }
+}
+
+float3 GetNormal()
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  float3 mainNormal     = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic);
+  float3 overrideNormal = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic);
+  return normalize(lerp(mainNormal, overrideNormal, matStrength));
+}
+
+float3 GetBaseColor()
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  float3 mainColor     = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic).rgb;
+  float3 overrideColor = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic).rgb;
+  return lerp(mainColor, overrideColor, matStrength);
+}
+
+float GetRoughness()
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  float mainRoughness     = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic).g;
+  float overrideRoughness = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic).g;
+  return lerp(mainRoughness, overrideRoughness, matStrength) + GetMaterialData(RoughnessBias);
+}
+
+float GetMetallic()
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  float mainMetallic     = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic).b;
+  float overrideMetallic = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic).b;
+  return lerp(mainMetallic, overrideMetallic, matStrength);
+}
+
+float GetOcclusion()
+{
+  const bool useStochastic = GetMaterialData(UseStochasticSampling);
+  float matStrength = G.Input.TexCoord0.x;
+
+  float mainOcclusion     = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.BaseTexIdx, useStochastic).r;
+  float overrideOcclusion = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.OverTexIdx, useStochastic).r;
+  float occlusion = lerp(mainOcclusion, overrideOcclusion, matStrength);
+
+  if (GetMaterialData(InvertOcclusion))
+  {
+    occlusion = 1.0 - occlusion;
+  }
+
+  return occlusion;
+}
+
+float  GetReflectance() { return 0.5f; }
+float  GetOpacity()     { return 1.0f; }

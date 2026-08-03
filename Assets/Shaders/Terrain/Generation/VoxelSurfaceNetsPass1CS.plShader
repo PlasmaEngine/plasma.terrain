@@ -1,0 +1,225 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Generation/VoxelBakeConstants.h>
+#include <Shaders/Terrain/Generation/VoxelMeshConstants.h>
+
+/// Packed voxel input (same format written by VoxelBakeCS).
+StructuredBuffer<uint>              BakedVoxels BIND_GROUP(BG_DRAW_CALL);
+/// Per-voxel packed data (M³ uint32s). Lower 16 = SDF float16, upper 16 = material strength float16.
+StructuredBuffer<uint>              BakedVoxelDist BIND_GROUP(BG_DRAW_CALL);
+RWStructuredBuffer<VoxelGpuVertex>  OutVertices BIND_GROUP(BG_DRAW_CALL);
+
+// Corner offsets of a unit cell, indexed 0-7.
+// Index = dx + dy*2 + dz*4 (dx,dy,dz ∈ {0,1}).
+static const int3 CornerOffset[8] =
+{
+  int3(0,0,0), int3(1,0,0), int3(0,1,0), int3(1,1,0),
+  int3(0,0,1), int3(1,0,1), int3(0,1,1), int3(1,1,1),
+};
+
+// 12 cell edges defined by two corner indices (from CornerOffset above).
+// Groups of 4: X-direction edges, Y-direction edges, Z-direction edges.
+static const uint EdgeIdxA[12] = { 0,2,4,6,  0,1,4,5,  0,1,2,3 };
+static const uint EdgeIdxB[12] = { 1,3,5,7,  2,3,6,7,  4,5,6,7 };
+
+// M = VoxelResolution (total buffer dimension including border, always divisible by 8).
+uint ReadVoxelNibble(int3 pos, uint M)
+{
+  if (pos.x < 0 || pos.y < 0 || pos.z < 0) return 0u;
+  if ((uint)pos.x >= M || (uint)pos.y >= M || (uint)pos.z >= M) return 0u;
+  uint linearIdx = (uint)pos.z * M * M + (uint)pos.y * M + (uint)pos.x;
+  return (BakedVoxels[linearIdx / 8u] >> ((linearIdx % 8u) * 4u)) & 0xFu;
+}
+
+void ReadVoxelDistStrength(int3 pos, uint M, out float dist, out float strength)
+{
+  if (pos.x < 0 || pos.y < 0 || pos.z < 0) { dist = 1e6; strength = 0.0f; return; }
+  if ((uint)pos.x >= M || (uint)pos.y >= M || (uint)pos.z >= M) { dist = 1e6; strength = 0.0f; return; }
+  uint packed = BakedVoxelDist[(uint)pos.z * M * M + (uint)pos.y * M + (uint)pos.x];
+  dist     = f16tof32(packed & 0xFFFFu);
+  strength = f16tof32(packed >> 16u);
+}
+
+float ReadVoxelDist(int3 pos, uint M)
+{
+  float d, s;
+  ReadVoxelDistStrength(pos, M, d, s);
+  return d;
+}
+
+// Trilinear sample of the SDF at a fractional position in voxel coordinates.
+float SampleSdfTrilinear(float3 vp, uint M)
+{
+  int3 p0 = int3(floor(vp));
+  float3 f = vp - float3(p0);
+
+  float c000 = ReadVoxelDist(p0 + int3(0,0,0), M);
+  float c100 = ReadVoxelDist(p0 + int3(1,0,0), M);
+  float c010 = ReadVoxelDist(p0 + int3(0,1,0), M);
+  float c110 = ReadVoxelDist(p0 + int3(1,1,0), M);
+  float c001 = ReadVoxelDist(p0 + int3(0,0,1), M);
+  float c101 = ReadVoxelDist(p0 + int3(1,0,1), M);
+  float c011 = ReadVoxelDist(p0 + int3(0,1,1), M);
+  float c111 = ReadVoxelDist(p0 + int3(1,1,1), M);
+
+  float c00 = lerp(c000, c100, f.x);
+  float c10 = lerp(c010, c110, f.x);
+  float c01 = lerp(c001, c101, f.x);
+  float c11 = lerp(c011, c111, f.x);
+  float c0  = lerp(c00,  c10,  f.y);
+  float c1  = lerp(c01,  c11,  f.y);
+  return lerp(c0, c1, f.z);
+}
+
+[numthreads(4, 4, 4)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const uint N = GET_PUSH_CONSTANT(VoxelBakeConstants, VertexIdxPitch);  // inner resolution
+  const uint M = GET_PUSH_CONSTANT(VoxelBakeConstants, VoxelResolution); // total voxel buffer including border
+  const float gridSpacing = GET_PUSH_CONSTANT(VoxelBakeConstants, GridSpacing);
+  const uint N1 = N + 1u;          // cells per axis: covers volume bounds [0, N*GridSpacing] flush on both sides
+                             // (combined with the -0.5*GridSpacing shift in vertex/sample positions).
+                             // Cells 0 and N rely on border voxels for one set of corner samples.
+
+  if (DTid.x >= N1 || DTid.y >= N1 || DTid.z >= N1)
+    return;
+
+  int3 cell   = (int3)DTid;
+  uint outIdx = DTid.z * N1 * N1 + DTid.y * N1 + DTid.x;
+
+  // Offset into voxel buffer space: inner cell 0 maps to voxel border.
+  uint Border    = (M - N) / 2u;
+  int3 voxelCell = cell + (int3)(Border, Border, Border);
+
+  // Read the 8 corner voxel nibbles, signed distances, and material strengths from the extended buffer.
+  uint nibbles[8];
+  float dists[8];
+  float strengths[8];
+  [unroll]
+  for (uint c = 0; c < 8; ++c)
+  {
+    nibbles[c] = ReadVoxelNibble(voxelCell + CornerOffset[c], M);
+    ReadVoxelDistStrength(voxelCell + CornerOffset[c], M, dists[c], strengths[c]);
+  }
+
+  float3 posSum    = float3(0, 0, 0);
+  uint   crossings = 0u;
+
+  [unroll]
+  for (uint e = 0; e < 12; ++e)
+  {
+    bool solidA = (dists[EdgeIdxA[e]] <= 0.0f);
+    bool solidB = (dists[EdgeIdxB[e]] <= 0.0f);
+    if (solidA == solidB) continue;
+
+    // Physical positions use inner cell coords (independent of border offset). The -0.5 shift
+    // matches the shift applied to voxel centers in VoxelBakeCS so the SDF zero-crossing lands at
+    // the correct world position, while the vertex grid origin sits flush with the volume's near edge.
+    float3 pA = (float3(cell + CornerOffset[EdgeIdxA[e]]) - 0.5) * gridSpacing;
+    float3 pB = (float3(cell + CornerOffset[EdgeIdxB[e]]) - 0.5) * gridSpacing;
+
+    // SDF-interpolated edge crossing. Guard against zero denominator (equal distances).
+    float dA = dists[EdgeIdxA[e]];
+    float dB = dists[EdgeIdxB[e]];
+    float denom = dA - dB;
+    float t = (abs(denom) > 1e-6f) ? saturate(dA / denom) : 0.5f;
+    posSum    += lerp(pA, pB, t);
+    ++crossings;
+  }
+
+  VoxelGpuVertex vert;
+  vert.MaterialStrength = 0.0f;
+  vert.Pad1.x = 0;
+  vert.Pad1.y = 0;
+
+  if (crossings == 0u)
+  {
+    vert.Position      = float3(0, 0, 0);
+    vert.Normal        = float3(0, 0, 1);
+    vert.Tangent       = float3(1, 0, 0);
+    vert.BitangentSign = 1.0f;
+    vert.TexCoord      = float2(0, 0);
+    vert.Material      = 0xFFFFFFFFu;
+    OutVertices[outIdx] = vert;
+    return;
+  }
+
+  float3 avgPos = posSum / (float)crossings;
+
+  // Normal from SDF gradient sampled at the actual vertex position (trilinear), rather than at
+  // the cell center. This places the stencil where the surface really is, which removes most of
+  // the per-cell jitter the 8-corner gradient introduces on slopes. Dist is positive in air,
+  // negative in solid, so grad(dist) points outward — that IS the surface normal.
+  // avgPos is in physical space relative to the volume origin; corner sample at cell c lives at
+  // (c - 0.5) * GridSpacing (see edge-crossing position above), so the inverse mapping into
+  // voxel-buffer coordinates is avgPos / GridSpacing + Border + 0.5.
+  float3 vp = avgPos / gridSpacing + float3((float)Border + 0.5f, (float)Border + 0.5f, (float)Border + 0.5f);
+  const float h = 1.0f; // sample one voxel out on each side
+  float3 gradSdf;
+  gradSdf.x = SampleSdfTrilinear(vp + float3(h, 0, 0), M) - SampleSdfTrilinear(vp - float3(h, 0, 0), M);
+  gradSdf.y = SampleSdfTrilinear(vp + float3(0, h, 0), M) - SampleSdfTrilinear(vp - float3(0, h, 0), M);
+  gradSdf.z = SampleSdfTrilinear(vp + float3(0, 0, h), M) - SampleSdfTrilinear(vp - float3(0, 0, h), M);
+
+  float3 avgNormal = length(gradSdf) > 0.001f ? normalize(gradSdf) : float3(0, 0, 1);
+
+  float3 tangent;
+  if (abs(avgNormal.z) < 0.9f)
+    tangent = normalize(cross(float3(0, 0, 1), avgNormal));
+  else
+    tangent = normalize(cross(float3(0, 1, 0), avgNormal));
+
+  // Material vote among solid corners: primary key = total strength, tiebreaker = corner count.
+  // Strength-first prevents base-material (strength=0) corners from outvoting painted corners.
+  float strPerMat[16];
+  uint  cntPerMat[16];
+  [unroll] for (uint vi = 0u; vi < 16u; ++vi) { strPerMat[vi] = 0.0f; cntPerMat[vi] = 0u; }
+  [unroll]
+  for (uint ci = 0u; ci < 8u; ++ci)
+  {
+    uint n = nibbles[ci];
+    if (dists[ci] <= 0.0f) { strPerMat[n] += strengths[ci]; cntPerMat[n]++; }
+  }
+  uint dominantMat = 1u;
+  float dominantStr = -1.0f;
+  uint  dominantCnt = 0u;
+  [unroll]
+  for (uint mi = 0u; mi < 16u; ++mi)
+  {
+    if (strPerMat[mi] > dominantStr || (strPerMat[mi] == dominantStr && cntPerMat[mi] > dominantCnt))
+    {
+      dominantStr = strPerMat[mi];
+      dominantCnt = cntPerMat[mi];
+      dominantMat = mi;
+    }
+  }
+
+  // Average material strength from solid corners that match the dominant material and have strength > 0.
+  // Excluding zero-strength corners keeps the average representative of the actually-painted region.
+  float totalStrength = 0.0f;
+  uint  strengthCount = 0u;
+  [unroll]
+  for (uint si = 0u; si < 8u; ++si)
+  {
+    if (nibbles[si] == dominantMat && dists[si] <= 0.0f && strengths[si] > 0.0f)
+    {
+      totalStrength += strengths[si];
+      strengthCount++;
+    }
+  }
+  float vertStrength = (strengthCount > 0u) ? (totalStrength / (float)strengthCount) : 0.0f;
+
+  vert.Position         = avgPos;
+  vert.Normal           = avgNormal;
+  vert.Tangent          = tangent;
+  vert.BitangentSign    = 1.0f;
+  vert.TexCoord         = avgPos.xy / (gridSpacing * (float)N);
+  vert.Material         = dominantMat;
+  vert.MaterialStrength = vertStrength;
+  OutVertices[outIdx] = vert;
+}

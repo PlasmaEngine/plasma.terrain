@@ -1,0 +1,20 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include "VoxelMeshConstants.h"
+
+StructuredBuffer<VoxelMeshCounts> InCounts     BIND_GROUP(BG_DRAW_CALL);
+RWByteAddressBuffer               OutDrawArgs  BIND_GROUP(BG_DRAW_CALL);
+
+[numthreads(1, 1, 1)]
+void main()
+{
+  uint primCount = InCounts[0].PrimitiveCount;
+  // DrawInstancedIndirect args: VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation
+  OutDrawArgs.Store4(0, uint4(primCount * 3u, 1u, 0u, 0u));
+}

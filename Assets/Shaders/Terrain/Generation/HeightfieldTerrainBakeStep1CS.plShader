@@ -1,0 +1,303 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Generation/HeightfieldBakeConstants.h>
+#include <Shaders/Terrain/Generation/TerrainBrushData.h>
+#include <Shaders/Terrain/Generation/TerrainNoise.h>
+
+// 2D isosceles trapezoid SDF (Inigo Quilez).
+// p.x = horizontal offset (Y axis), p.y = vertical offset (Z axis).
+// r1 = half-width at bottom (p.y = -h), r2 = half-width at top (p.y = +h), h = half-height.
+// When r1 == r2 degenerates to a 2D box SDF.
+float sdTrapezoid(float2 p, float r1, float r2, float h)
+{
+  float2 k1 = float2(r2, h);
+  float2 k2 = float2(r2 - r1, 2.0 * h);
+  p.x = abs(p.x);
+  float2 ca = float2(p.x - min(p.x, (p.y < 0.0) ? r1 : r2), abs(p.y) - h);
+  float denom = dot(k2, k2);
+  float2 cb = p - k1 + k2 * clamp((denom > 1e-6) ? (dot(k1 - p, k2) / denom) : 0.0, 0.0, 1.0);
+  float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+  return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+}
+
+/// Source heights uploaded from CPU each time a patch is dirtied.
+StructuredBuffer<float> SourceHeights BIND_GROUP(BG_DRAW_CALL);
+
+/// Persistent baked height buffer. Bound as UAV here, as SRV in the vertex shader.
+RWStructuredBuffer<float> BakedHeights BIND_GROUP(BG_DRAW_CALL);
+
+/// Source layer mask uploaded from CPU each time a patch is dirtied.
+/// Packed uint2 per vertex: x = idx0|idx1<<8|idx2<<16|w0<<24, y = w1|w2<<8.
+StructuredBuffer<uint2> SourceMask BIND_GROUP(BG_DRAW_CALL);
+
+/// Persistent baked layer mask buffer. Bound as UAV here, as SRV in the vertex shader.
+RWStructuredBuffer<uint2> BakedMask BIND_GROUP(BG_DRAW_CALL);
+
+/// All active terrain brushes for this frame. BrushCount entries are valid.
+StructuredBuffer<TerrainBrushData> Brushes BIND_GROUP(BG_DRAW_CALL);
+
+[numthreads(16, 16, 1)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const uint vertexIdxPitch = GET_PUSH_CONSTANT(HeightfieldBakeConstants, VertexIdxPitch);
+  const float gridSpacing = GET_PUSH_CONSTANT(HeightfieldBakeConstants, GridSpacing);
+  const uint brushCount = GET_PUSH_CONSTANT(HeightfieldBakeConstants, BrushCount);
+  const uint defaultMaterialIndex = GET_PUSH_CONSTANT(HeightfieldBakeConstants, DefaultMaterialIndex);
+  const float patchOriginX = GET_PUSH_CONSTANT(HeightfieldBakeConstants, PatchOriginX);
+  const float patchOriginY = GET_PUSH_CONSTANT(HeightfieldBakeConstants, PatchOriginY);
+
+  if (DTid.x >= vertexIdxPitch || DTid.y >= vertexIdxPitch)
+    return;
+
+  uint idx = DTid.y * vertexIdxPitch + DTid.x;
+  float height = SourceHeights[idx];
+
+  // Unpack per-vertex material data: 3 indices and 3 weights.
+  // uint2.x: idx0(8) | idx1(8) | idx2(8) | w0(8)
+  // uint2.y: w1(8) | w2(8)
+  uint2 packedMask = SourceMask[idx];
+  uint matIdx0 =  packedMask.x        & 0xFFu;
+  uint matIdx1 = (packedMask.x >>  8) & 0xFFu;
+  uint matIdx2 = (packedMask.x >> 16) & 0xFFu;
+  float w0 = (float)((packedMask.x >> 24) & 0xFFu) * (1.0 / 255.0);
+  float w1 = (float)( packedMask.y        & 0xFFu) * (1.0 / 255.0);
+  float w2 = (float)((packedMask.y >>  8) & 0xFFu) * (1.0 / 255.0);
+
+  // VertexIdxPitch includes a 4-vertex border; inner vertex (4,4) maps to local position (0,0).
+  float2 vertexLocalXY = float2((float)DTid.x - 4.0, (float)DTid.y - 4.0) * gridSpacing;
+
+  [loop]
+  for (uint i = 0; i < brushCount; ++i)
+  {
+    UNPACKUINT8(ModifyMode, MaterialIndex, HalfExtentZLow, HalfExtentZHigh, Brushes[i].PackedModeMat);
+    UNPACKHALF2(MaterialStrength, Falloff, Brushes[i].PackedMatStrFalloff);
+    // Paint-only modes with no material are no-ops.
+    if (MaterialStrength <= 0.0 && (ModifyMode == plTerrainModifyMode_OnlyPaint2D || ModifyMode == plTerrainModifyMode_Add || ModifyMode == plTerrainModifyMode_OnlyPaint3D))
+      continue;
+
+    UNPACKHALF2(HalfExtentX, HalfExtentYBottom, Brushes[i].PackedExtents);
+    UNPACKHALF2(InnerRadius, OuterRadius, Brushes[i].PackedRadii);
+
+    float2 toVertex = vertexLocalXY - Brushes[i].Position.xy;
+
+    // Carve on heightfields: full 3D rounded-box SDF in brush-local space, identical to VoxelBakeCS.
+    // The vertex's actual world Z (= current `height`) is used so the test honors HalfExtentZ and the
+    // brush rotation; vertices above or below the brush's Z extent are not marked. Inside the box +
+    // corner-rounding radius the vertex is tagged with sentinel material 0xFF; the render shader culls
+    // any triangle touching a sentinel vertex. Sort guarantees Carve runs last so the sentinel is not
+    // overwritten by later brushes. No falloff, OuterRadius ignored, no 2D footprint pre-gate.
+    if (ModifyMode == plTerrainModifyMode_Carve)
+    {
+      float HalfExtentZ = f16tof32(HalfExtentZLow | (HalfExtentZHigh << 8));
+      float3 toVertex3D = float3(toVertex, height - Brushes[i].Position.z);
+      float3 localP3D;
+      localP3D.x = dot(Brushes[i].InvRotRow0.xyz, toVertex3D);
+      localP3D.y = dot(Brushes[i].InvRotRow1.xyz, toVertex3D);
+      localP3D.z = dot(Brushes[i].InvRotRow2.xyz, toVertex3D);
+      float trapSdf = sdTrapezoid(float2(localP3D.y, localP3D.z), HalfExtentYBottom, Brushes[i].HalfExtentYTop, HalfExtentZ);
+      float xDist = abs(localP3D.x) - HalfExtentX;
+      float sdfInner = length(max(float2(xDist, trapSdf), 0.0)) + min(max(xDist, trapSdf), 0.0) - InnerRadius;
+      if (sdfInner <= 0.0)
+      {
+        matIdx0 = 0xFFu; w0 = 1.0;
+        matIdx1 = 0u;    w1 = 0.0;
+        matIdx2 = 0u;    w2 = 0.0;
+      }
+      continue;
+    }
+
+    // Add / OnlyPaint3D on heightfield: paint material using 3D SDF without modifying heights.
+    // Uses the vertex's actual height so only vertices inside the 3D volume are affected.
+    if (ModifyMode == plTerrainModifyMode_Add || ModifyMode == plTerrainModifyMode_OnlyPaint3D)
+    {
+      float HalfExtentZ = f16tof32(HalfExtentZLow | (HalfExtentZHigh << 8));
+      float3 toVertex3D = float3(toVertex, height - Brushes[i].Position.z);
+      float3 localP3D;
+      localP3D.x = dot(Brushes[i].InvRotRow0.xyz, toVertex3D);
+      localP3D.y = dot(Brushes[i].InvRotRow1.xyz, toVertex3D);
+      localP3D.z = dot(Brushes[i].InvRotRow2.xyz, toVertex3D);
+      float trapSdf = sdTrapezoid(float2(localP3D.y, localP3D.z), HalfExtentYBottom, Brushes[i].HalfExtentYTop, HalfExtentZ);
+      float xDist = abs(localP3D.x) - HalfExtentX;
+      float sdf3D = length(max(float2(xDist, trapSdf), 0.0)) + min(max(xDist, trapSdf), 0.0) - InnerRadius;
+
+      if (sdf3D > OuterRadius)
+        continue;
+
+      float t = saturate(1.0f - sdf3D / max(OuterRadius, 0.001f));
+      float weight = pow(smoothstep(0.0, 1.0, t), Falloff);
+      float incomingW = weight * MaterialStrength;
+
+      if (incomingW > 0.0)
+      {
+        uint mi = MaterialIndex;
+        if (matIdx0 == mi)             { w0 = max(w0, incomingW); }
+        else if (matIdx1 == mi)        { w1 = max(w1, incomingW); }
+        else if (matIdx2 == mi)        { w2 = max(w2, incomingW); }
+        else if (w0 <= w1 && w0 <= w2) { if (incomingW > w0) { matIdx0 = mi; w0 = incomingW; } }
+        else if (w1 <= w2)             { if (incomingW > w1) { matIdx1 = mi; w1 = incomingW; } }
+        else                           { if (incomingW > w2) { matIdx2 = mi; w2 = incomingW; } }
+      }
+      continue;
+    }
+
+    // Non-Carve, non-3D-paint modes: project the vertex onto the brush's local Z=0 plane by finding where the
+    // vertical line at (vx, vy) intersects it. Plane normal is InvRotRow2.xyz. Solving
+    // dot(n, delta + (0,0,dz)) = 0 gives dz below. Using this dz as delta3D.z means localP.z = 0
+    // by construction, so the footprint SDF is a true 2D test in brush-local XY — tilt no longer
+    // distorts the footprint shape.
+    float3 brushNormal = Brushes[i].InvRotRow2.xyz;
+    float  dz          = (abs(brushNormal.z) > 0.001)
+                            ? -(brushNormal.x * toVertex.x + brushNormal.y * toVertex.y) / brushNormal.z
+                            : 0.0;
+    float3 delta3D = float3(toVertex, dz);
+    float2 localP;
+    localP.x = dot(Brushes[i].InvRotRow0.xyz, delta3D);
+    localP.y = dot(Brushes[i].InvRotRow1.xyz, delta3D);
+
+    // Rounded-rectangle SDF (Inigo Quilez formulation) in brush-local XY.
+    // HalfExtentX/Y are the half-sizes of the straight rectangular region.
+    // OuterRadius is the corner rounding radius.  SDF < 0 means inside.
+    float2 q2  = abs(localP) - float2(HalfExtentX, HalfExtentYBottom);
+    float  sdf = min(max(q2.x, q2.y), 0.0) + length(max(q2, float2(0.0, 0.0))) - OuterRadius - InnerRadius;
+
+    // Brush noise: perturb the SDF distance so the falloff edge becomes irregular, and
+    // perturb the brush height so the surface inside the inner radius gets bumpy.
+    // Sampled at absolute world XY (vertexLocalXY + patch origin) so the pattern is global
+    // across patches and across brushes. The same n is reused for height bump below.
+    // Edge perturbation: faded by 1 - exp(-k*t), nearly full inside the falloff ring,
+    // drops off sharply just before reaching the outer edge — so noise can't push the
+    // footprint past the original outer outline. Height perturbation: full strength, the
+    // existing falloff `weight` handles the blend toward the brush boundary on its own.
+    float n = 0.0;
+    if (Brushes[i].Noise > 0.0 && OuterRadius > 0.0 && abs(Brushes[i].NoiseScale) > 0.0001)
+    {
+      float2 worldXY = vertexLocalXY + float2(patchOriginX, patchOriginY);
+      n = FBM2D(worldXY / Brushes[i].NoiseScale);
+      float tEdge = saturate(-sdf / OuterRadius);
+      float envelope = 1.0 - exp(-6.0 * tEdge);
+      sdf += n * envelope * Brushes[i].Noise * OuterRadius;
+    }
+
+    if (sdf <= 0.0)
+    {
+      // t = 0 at the outer edge (sdf = 0), t = 1 at or past the inner boundary.
+      float t = saturate(-sdf / OuterRadius);
+      float weight = pow(smoothstep(0.0, 1.0, t), Falloff);
+
+      // Height modification — skipped for paint-only modes.
+      if (ModifyMode != plTerrainModifyMode_OnlyPaint2D)
+      {
+        // brushHeight is the brush plane's Z at this vertex's XY position.
+        // dz = brushHeight - Position.z  (derived above), so brushHeight = Position.z + dz.
+        // Apply full-strength noise bump here (no envelope) so the surface inside the
+        // inner radius is not perfectly flat. The blend `weight` already fades it out
+        // toward the brush boundary.
+        float brushHeight = Brushes[i].Position.z + dz + n * Brushes[i].Noise * OuterRadius;
+        float effectHeight;
+        if (ModifyMode == plTerrainModifyMode_Max || ModifyMode == plTerrainModifyMode_Add)      // Max: only raises terrain
+          effectHeight = max(height, brushHeight);
+        else if (ModifyMode == plTerrainModifyMode_Min) // Min: only lowers terrain
+          effectHeight = min(height, brushHeight);
+        else                                  // Set: forces terrain to brush height
+          effectHeight = brushHeight;
+
+        height = lerp(height, effectHeight, weight);
+      }
+
+      // Material painting — only active when MaterialStrength > 0.
+      if (MaterialStrength > 0.0)
+      {
+        uint mi = MaterialIndex;
+        float incomingW = weight * MaterialStrength;
+
+        // MAX existing slot or replace the weakest one.
+        // No special SET behavior in the inner region: other brushes' contributions
+        // in remaining slots survive and NormalsCS normalization blends them correctly.
+        if (matIdx0 == mi)
+        {
+          w0 = max(w0, incomingW);
+        }
+        else if (matIdx1 == mi)
+        {
+          w1 = max(w1, incomingW);
+        }
+        else if (matIdx2 == mi)
+        {
+          w2 = max(w2, incomingW);
+        }
+        else if (w0 <= w1 && w0 <= w2)
+        {
+          if (incomingW > w0) { matIdx0 = mi; w0 = incomingW; }
+        }
+        else if (w1 <= w2)
+        {
+          if (incomingW > w1) { matIdx1 = mi; w1 = incomingW; }
+        }
+        else
+        {
+          if (incomingW > w2) { matIdx2 = mi; w2 = incomingW; }
+        }
+      }
+    }
+  }
+
+  BakedHeights[idx] = height;
+
+  // Carve sentinel: keep the per-slot weights as-is and skip default-material fill / normalize / sort,
+  // so VS can detect matIdx0 == 0xFF and emit NaN positions to cull the surrounding triangles.
+  if (matIdx0 != 0xFFu)
+  {
+    // Finalize material weights in a single dispatch:
+    // Fill any remaining weight with the heightfield's default material, normalize so the 3 weights sum to 1,
+    // then sort slots descending by weight so slot 0 always holds the dominant material.
+    // Done here (instead of in BakeStep2) because there is no UAV-to-UAV barrier between consecutive dispatches
+    // on the same buffer, which previously caused Step 2 to read stale BakedMask values from prior bakes.
+    float totalW = w0 + w1 + w2;
+    if (totalW < 1.0)
+    {
+      const uint defIdx = defaultMaterialIndex;
+      const float remaining = 1.0 - totalW;
+
+      if (matIdx0 == defIdx)
+        w0 += remaining;
+      else if (matIdx1 == defIdx)
+        w1 += remaining;
+      else if (matIdx2 == defIdx)
+        w2 += remaining;
+      else if (w0 <= w1 && w0 <= w2)
+        { matIdx0 = defIdx; w0 = remaining; }
+      else if (w1 <= w2)
+        { matIdx1 = defIdx; w1 = remaining; }
+      else
+        { matIdx2 = defIdx; w2 = remaining; }
+
+      totalW = w0 + w1 + w2;
+    }
+
+    if (totalW > 0.0)
+    {
+      const float invTotal = 1.0 / totalW;
+      w0 *= invTotal;
+      w1 *= invTotal;
+      w2 *= invTotal;
+    }
+
+    if (w0 < w1) { float tw = w0; w0 = w1; w1 = tw; uint ti = matIdx0; matIdx0 = matIdx1; matIdx1 = ti; }
+    if (w0 < w2) { float tw = w0; w0 = w2; w2 = tw; uint ti = matIdx0; matIdx0 = matIdx2; matIdx2 = ti; }
+    if (w1 < w2) { float tw = w1; w1 = w2; w2 = tw; uint ti = matIdx1; matIdx1 = matIdx2; matIdx2 = ti; }
+  }
+
+  uint r0 = (uint)(saturate(w0) * 255.0 + 0.5);
+  uint r1 = (uint)(saturate(w1) * 255.0 + 0.5);
+  uint r2 = (uint)(saturate(w2) * 255.0 + 0.5);
+  uint2 outMask;
+  outMask.x = (matIdx0 & 0xFFu) | ((matIdx1 & 0xFFu) << 8) | ((matIdx2 & 0xFFu) << 16) | (r0 << 24);
+  outMask.y = r1 | (r2 << 8);
+  BakedMask[idx] = outMask;
+}
