@@ -8,8 +8,8 @@ PluginInfo
 	// Drawn for the package - the bundle carried no artwork.
 	string %Icon{"TerrainIcon.png"}
 	string %Banner{"TerrainBanner.png"}
-	string %MinEngineVersion{"0.7.0"}
-	string %MaxEngineVersion{"0.7.0"}
+	string %MinEngineVersion{"0.11.2"}
+	string %MaxEngineVersion{"0.11.2"}
 	string %Description{"Adds support for terrain."}
 	string %EditorPlugins{"plEditorPluginTerrain"}
 	string %EditorEnginePlugins{}

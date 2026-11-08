@@ -10,7 +10,8 @@ public class EditorPluginTerrainModule : ModuleRules
 
         PlasmaPackageSdk.ConfigureEditorSdkConsumer(this, context);
 
-        PlasmaPackageQt.ConfigureQtModule(this, context, "EditorPluginTerrainModule",
-            "Source/EditorPluginTerrain", "Core", "Gui", "Widgets");
+        // The component icons are registered with EditorUi as an icon folder.
+        PlasmaPackageSdk.AddImportLibrary(this, context, "plEditorUi");
+        PlasmaPackageSdk.AddImportLibrary(this, context, "plGameUiPlugin");
     }
 }

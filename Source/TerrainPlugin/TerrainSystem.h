@@ -174,8 +174,6 @@ class PL_TERRAINPLUGIN_DLL plTerrainSystem : public plWorldModule
   PL_DECLARE_WORLD_MODULE();
   PL_ADD_DYNAMIC_REFLECTION(plTerrainSystem, plWorldModule);
 
-  using SUPER = plWorldModule;
-
 public:
   plTerrainSystem(plWorld* pWorld);
   ~plTerrainSystem();

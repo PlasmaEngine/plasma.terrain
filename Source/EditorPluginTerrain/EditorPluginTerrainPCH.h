@@ -8,7 +8,7 @@
 
 #include <EditorPluginTerrain/EditorPluginTerrainDLL.h>
 
-#include <EditorFramework/EditorApp/EditorApp.moc.h>
+#include <EditorFramework/EditorApp/EditorApp.h>
 #include <Foundation/Reflection/Reflection.h>
 #include <Foundation/Strings/StringBuilder.h>
 #include <Foundation/Strings/TranslationLookup.h>

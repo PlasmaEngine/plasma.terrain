@@ -1,8 +1,0 @@
-<RCC>
-  <qresource prefix="TypeIcons">
-    <file>plTerrainHeightfieldComponent.svg</file>
-    <file>plTerrainBrush2DComponent.svg</file>
-    <file>plTerrainBrush3DComponent.svg</file>
-    <file>plTerrainVoxelComponent.svg</file>
-  </qresource>
-</RCC>
