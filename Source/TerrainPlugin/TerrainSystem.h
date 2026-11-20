@@ -13,6 +13,8 @@
 #include <Shaders/Terrain/Generation/TerrainBrushData.h>
 #include <Shaders/Terrain/Generation/VoxelMeshConstants.h>
 
+using plMaterialResourceHandle = plTypedResourceHandle<class plMaterialResource>;
+
 struct PL_TERRAINPLUGIN_DLL plTerrainModifyMode
 {
   using StorageType = plUInt8;
@@ -81,6 +83,9 @@ struct plTerrainData_Heightfield
   plVec2 m_vImageOffset = plVec2::MakeZero(); ///< UV offset into m_hHeightImage; selects the top-left corner of the sampled rect.
   plVec2 m_vImageSize = plVec2(1.0f);         ///< UV extent of the sampled rect within m_hHeightImage. Values < 1 select a sub-region.
   float m_fHeightScale = 0.0f;              ///< Multiplier applied to the [0, 1] greyscale sample to produce a world-space height.
+  /// Optional painted layer map over the same rectangle as m_hHeightImage. R, G and B each hold one layer as
+  /// 16 bits (index << 8 | weight). When set, it replaces m_MaskData as the source mask of each bake.
+  plImageDataResourceHandle m_hLayerImage;
   /// CPU-side source material mask; (CellsPerSide+9)^2 packed uint64 entries.
   /// Each entry: bits [7:0]=idx0, [15:8]=idx1, [23:16]=idx2, [31:24]=w0, [39:32]=w1, [47:40]=w2.
   /// Starts all-zero; brushes paint into it via the bake CS.
@@ -90,6 +95,10 @@ struct plTerrainData_Heightfield
   /// Material index used to fill brush-unpainted weight in the normals CS.
   plUInt8 m_uiDefaultMaterialIndex = 0;
   bool m_bDirty = true;
+  /// Set after each bake; cleared once the baked data is copied into the published terrain atlas.
+  bool m_bPublishDirty = true;
+  /// The heightfield's terrain material. The first heightfield with one provides the published layer textures.
+  plMaterialResourceHandle m_hMaterial;
   plTagSet m_Tags; ///< Identity tags for this heightfield; matched against brush include-tag filters.
   /// Hash of the indices of brushes that spatially overlap this heightfield.
   /// Updated each time brush state is re-evaluated; compared against the previous value to skip
@@ -182,6 +191,9 @@ public:
   void RemoveHeightfield(plUInt32& uiPatchIndex);
   plTerrainData_Heightfield& ModifyHeightfield(plUInt32 uiIdx);
 
+  /// Sets the material whose layers the terrain publishes for other shaders. Does not re-bake the heightfield.
+  void SetHeightfieldMaterial(plUInt32 uiIdx, const plMaterialResourceHandle& hMaterial);
+
   /// Returns the baked GPU height buffer handle (SRV in VS, UAV in heights CS).
   plGALBufferHandle GetHeightBuffer(plUInt32 uiPatchIndex) const;
 
@@ -244,12 +256,22 @@ public:
   /// When enabled, the next bake will also read back vertex + index data for collision mesh building.
   void SetNeedsCollisionReadback(plUInt32 uiIndex, bool bEnable);
 
+  /// Binds the published terrain data of the rendered world for a view, or an empty table when the world has no
+  /// terrain, so TerrainSample.h never reads a stale or uninitialised table. Registered for the plugin's lifetime.
+  static void OnFrameBindingEvent(const plRenderWorldFrameBindingEvent& e);
+  static void OnPluginShutdown();
+
 protected:
   virtual void Initialize() override;
   virtual void Deinitialize() override;
 
 private:
   static void OnRenderEvent(const plRenderWorldRenderEvent& e);
+
+  /// Copies freshly baked heightfields into the terrain atlas and refreshes the tables that TerrainSample.h reads.
+  void PublishTerrain();
+  void PublishLayers(plGALCommandEncoder* pCommandEncoder);
+  void DestroyPublishedResources();
 
   void InternalRemoveHeightfield(plUInt32& uiPatchIndex);
 
@@ -275,6 +297,23 @@ private:
   plDynamicArray<plTerrainData_Heightfield> m_Patches;
   plShaderResourceHandle m_hTerrainBakeStep1Shader;
   plShaderResourceHandle m_hTerrainBakeStep2Shader;
+
+  // Terrain data published for every view of this world. See TerrainPublishConstants.h for the layout.
+  plShaderResourceHandle m_hTerrainPublishShader;
+  plGALTextureHandle m_hPublishedAtlas;
+  plGALTextureHandle m_hPublishedTable;
+  plGALTextureHandle m_hPublishedLayerTable;
+  plUInt32 m_uiPublishedAtlasSize = 0;
+  plUInt32 m_uiPublishedSlices = 0;
+  bool m_bPublishedTableDirty = true;
+  plMaterialResourceHandle m_hPublishedMaterial;
+  plUInt32 m_uiPublishedMaterialChangeCounter = plInvalidIndex;
+  plUInt32 m_uiPublishedLayerFlags = 0;
+  float m_fPublishedRoughnessBias = 0.0f;
+  // The layer texture arrays of m_hPublishedMaterial, refreshed every frame because streaming swaps them.
+  plGALTextureHandle m_hPublishedLayerBase;
+  plGALTextureHandle m_hPublishedLayerNormal;
+  plGALTextureHandle m_hPublishedLayerORM;
 
   void UpdateVoxels(plUInt32 uiIndex, plRenderContext* pRenderContext, plGALDevice* pDevice, plGALCommandEncoder* pCommandEncoder);
   void ProcessPendingMeshReadbacks();

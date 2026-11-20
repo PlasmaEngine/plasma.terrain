@@ -1,0 +1,35 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+[COMPUTESHADER]
+
+#include <Shaders/Common/Common.h>
+#include <Shaders/Terrain/Rendering/TerrainPublishConstants.h>
+
+/// Baked heights and layer mask of one heightfield, read as SRV so the engine orders this after the bake.
+StructuredBuffer<float> BakedHeights BIND_GROUP(BG_DRAW_CALL);
+StructuredBuffer<uint2> BakedMask BIND_GROUP(BG_DRAW_CALL);
+
+RWTexture2DArray<float4> TerrainAtlasOutput BIND_GROUP(BG_DRAW_CALL);
+
+[numthreads(16, 16, 1)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+  const uint vertexIdxPitch = GET_PUSH_CONSTANT(TerrainPublishConstants, VertexIdxPitch);
+  const uint vertexCount = GET_PUSH_CONSTANT(TerrainPublishConstants, VertexCount);
+  const uint slice = GET_PUSH_CONSTANT(TerrainPublishConstants, Slice);
+
+  if (DTid.x >= vertexCount || DTid.y >= vertexCount)
+    return;
+
+  // Skip the 4-vertex border of the stored grid.
+  const uint idx = (DTid.y + 4u) * vertexIdxPitch + (DTid.x + 4u);
+  const uint2 mask = BakedMask[idx];
+
+  const uint indices = mask.x & 0xFFFFFFu;
+  const uint weights = (mask.x >> 24) | ((mask.y & 0xFFFFu) << 8);
+
+  TerrainAtlasOutput[uint3(DTid.xy, slice)] = float4(BakedHeights[idx], (float)indices, (float)weights, 0.0);
+}

@@ -13,6 +13,8 @@ MSAA
 CAMERA_MODE
 SHADING_QUALITY
 MATERIAL_PREVIEW
+GAMEOBJECT_VELOCITY
+VELOCITY_OUTPUT
 
 [MATERIALPARAMETER]
 
@@ -82,6 +84,11 @@ INT2(Material7TextureIndex);
 #define USE_FOG
 #define USE_DECALS
 #define NO_SCREEN_SPACE_TECHNIQUES // deactivate AO on terrain geometry
+
+// Motion vectors for temporal anti-aliasing and upscaling; without them the terrain jitters under camera motion.
+#if GAMEOBJECT_VELOCITY
+  #define USE_VELOCITY
+#endif
 
 [VERTEXSHADER]
 

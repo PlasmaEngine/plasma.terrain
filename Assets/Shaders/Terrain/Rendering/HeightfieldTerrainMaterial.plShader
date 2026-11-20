@@ -13,6 +13,8 @@ MSAA
 CAMERA_MODE
 SHADING_QUALITY
 MATERIAL_PREVIEW
+GAMEOBJECT_VELOCITY
+VELOCITY_OUTPUT
 
 [MATERIALPARAMETER]
 
@@ -31,6 +33,7 @@ bool InvertOcclusion;
 float HeightScale @Default(0.0) @Clamp(0.0, 10.0);
 
 /// World-space scale applied to triplanar UVs. Smaller values tile the texture more coarsely.
+/// Each layer multiplies it by its own MaterialNScale.
 float TextureScale @Default(0.5) @Clamp(0.001, 100.0);
 
 float RoughnessBias @Default(0.0) @Clamp(-1.0, 1.0);
@@ -44,6 +47,64 @@ int2 Material4TextureIndex @Default(0) @Clamp(0, 255);
 int2 Material5TextureIndex @Default(0) @Clamp(0, 255);
 int2 Material6TextureIndex @Default(0) @Clamp(0, 255);
 int2 Material7TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material8TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material9TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material10TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material11TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material12TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material13TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material14TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material15TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material16TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material17TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material18TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material19TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material20TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material21TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material22TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material23TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material24TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material25TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material26TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material27TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material28TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material29TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material30TextureIndex @Default(0) @Clamp(0, 255);
+int2 Material31TextureIndex @Default(0) @Clamp(0, 255);
+
+/// Tiling of each layer, multiplied with TextureScale.
+float Material0Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material1Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material2Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material3Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material4Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material5Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material6Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material7Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material8Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material9Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material10Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material11Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material12Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material13Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material14Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material15Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material16Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material17Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material18Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material19Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material20Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material21Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material22Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material23Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material24Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material25Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material26Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material27Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material28Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material29Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material30Scale @Default(1.0) @Clamp(0.001, 100.0);
+float Material31Scale @Default(1.0) @Clamp(0.001, 100.0);
 
 [MATERIALCONFIG]
 
@@ -72,6 +133,63 @@ INT2(Material4TextureIndex);
 INT2(Material5TextureIndex);
 INT2(Material6TextureIndex);
 INT2(Material7TextureIndex);
+INT2(Material8TextureIndex);
+INT2(Material9TextureIndex);
+INT2(Material10TextureIndex);
+INT2(Material11TextureIndex);
+INT2(Material12TextureIndex);
+INT2(Material13TextureIndex);
+INT2(Material14TextureIndex);
+INT2(Material15TextureIndex);
+INT2(Material16TextureIndex);
+INT2(Material17TextureIndex);
+INT2(Material18TextureIndex);
+INT2(Material19TextureIndex);
+INT2(Material20TextureIndex);
+INT2(Material21TextureIndex);
+INT2(Material22TextureIndex);
+INT2(Material23TextureIndex);
+INT2(Material24TextureIndex);
+INT2(Material25TextureIndex);
+INT2(Material26TextureIndex);
+INT2(Material27TextureIndex);
+INT2(Material28TextureIndex);
+INT2(Material29TextureIndex);
+INT2(Material30TextureIndex);
+INT2(Material31TextureIndex);
+
+FLOAT1(Material0Scale);
+FLOAT1(Material1Scale);
+FLOAT1(Material2Scale);
+FLOAT1(Material3Scale);
+FLOAT1(Material4Scale);
+FLOAT1(Material5Scale);
+FLOAT1(Material6Scale);
+FLOAT1(Material7Scale);
+FLOAT1(Material8Scale);
+FLOAT1(Material9Scale);
+FLOAT1(Material10Scale);
+FLOAT1(Material11Scale);
+FLOAT1(Material12Scale);
+FLOAT1(Material13Scale);
+FLOAT1(Material14Scale);
+FLOAT1(Material15Scale);
+FLOAT1(Material16Scale);
+FLOAT1(Material17Scale);
+FLOAT1(Material18Scale);
+FLOAT1(Material19Scale);
+FLOAT1(Material20Scale);
+FLOAT1(Material21Scale);
+FLOAT1(Material22Scale);
+FLOAT1(Material23Scale);
+FLOAT1(Material24Scale);
+FLOAT1(Material25Scale);
+FLOAT1(Material26Scale);
+FLOAT1(Material27Scale);
+FLOAT1(Material28Scale);
+FLOAT1(Material29Scale);
+FLOAT1(Material30Scale);
+FLOAT1(Material31Scale);
 
 [SHADER]
 
@@ -82,6 +200,11 @@ INT2(Material7TextureIndex);
 #define USE_FOG
 #define USE_DECALS
 #define NO_SCREEN_SPACE_TECHNIQUES // deactivate AO on terrain geometry
+
+// Motion vectors for temporal anti-aliasing and upscaling; without them the terrain jitters under camera motion.
+#if GAMEOBJECT_VELOCITY
+  #define USE_VELOCITY
+#endif
 
 [VERTEXSHADER]
 
@@ -114,7 +237,7 @@ VS_OUT main(uint VertexID : SV_VertexID)
 
 #define CUSTOM_GLOBALS \
   float3 TpWeights; \
-  float  Scale;     \
+  float3 Scales;    \
   uint2  TexIndices1; \
   uint2  TexIndices2; \
   uint2  TexIndices3; \
@@ -145,7 +268,34 @@ static const float NUM_TERRAIN_PARALLAX_STEPS_RCP = 1.0 / NUM_TERRAIN_PARALLAX_S
 /// assignments differ per vertex.
 StructuredBuffer<uint2> TerrainMask BIND_GROUP(BG_DRAW_CALL);
 
-void AccumulateMaskWeights(uint2 packed, float sampleWeight, inout float weights[8])
+static const uint NUM_TERRAIN_LAYERS = 32;
+
+/// The four vertices around a pixel carry at most 12 distinct layers. Their weights are summed per layer id here.
+static const uint MAX_MASK_CANDIDATES = 12;
+
+void AddMaskCandidate(uint matIdx, float weight, inout uint ids[MAX_MASK_CANDIDATES], inout float weights[MAX_MASK_CANDIDATES], inout uint count)
+{
+  if (weight <= 0.0)
+    return;
+
+  // Ids past the material's layer table use its last entry instead of dropping their weight.
+  matIdx = min(matIdx, NUM_TERRAIN_LAYERS - 1u);
+
+  [unroll] for (uint i = 0u; i < MAX_MASK_CANDIDATES; ++i)
+  {
+    if (i < count && ids[i] == matIdx)
+    {
+      weights[i] += weight;
+      return;
+    }
+  }
+
+  ids[count] = matIdx;
+  weights[count] = weight;
+  ++count;
+}
+
+void AccumulateMaskWeights(uint2 packed, float sampleWeight, inout uint ids[MAX_MASK_CANDIDATES], inout float weights[MAX_MASK_CANDIDATES], inout uint count)
 {
   uint matIdx0 =  packed.x        & 0xFFu;
   uint matIdx1 = (packed.x >>  8) & 0xFFu;
@@ -155,12 +305,51 @@ void AccumulateMaskWeights(uint2 packed, float sampleWeight, inout float weights
   float w1 = (float)( packed.y        & 0xFFu) * (1.0 / 255.0);
   float w2 = (float)((packed.y >>  8) & 0xFFu) * (1.0 / 255.0);
 
-  // The material asset exposes 8 texture-index entries, while terrain component / brush
-  // properties currently allow larger material ids. Match the old lookup behavior by
-  // clamping ids into the available table instead of dropping their weight.
-  weights[min(matIdx0, 7u)] += w0 * sampleWeight;
-  weights[min(matIdx1, 7u)] += w1 * sampleWeight;
-  weights[min(matIdx2, 7u)] += w2 * sampleWeight;
+  AddMaskCandidate(matIdx0, w0 * sampleWeight, ids, weights, count);
+  AddMaskCandidate(matIdx1, w1 * sampleWeight, ids, weights, count);
+  AddMaskCandidate(matIdx2, w2 * sampleWeight, ids, weights, count);
+}
+
+void GetLayerData(uint matIdx, out int2 ref_texIndices, out float ref_fScale)
+{
+  ref_texIndices = GetMaterialData(Material0TextureIndex);
+  ref_fScale = GetMaterialData(Material0Scale);
+
+  [forcecase] switch (matIdx)
+  {
+    case 1u: ref_texIndices = GetMaterialData(Material1TextureIndex); ref_fScale = GetMaterialData(Material1Scale); break;
+    case 2u: ref_texIndices = GetMaterialData(Material2TextureIndex); ref_fScale = GetMaterialData(Material2Scale); break;
+    case 3u: ref_texIndices = GetMaterialData(Material3TextureIndex); ref_fScale = GetMaterialData(Material3Scale); break;
+    case 4u: ref_texIndices = GetMaterialData(Material4TextureIndex); ref_fScale = GetMaterialData(Material4Scale); break;
+    case 5u: ref_texIndices = GetMaterialData(Material5TextureIndex); ref_fScale = GetMaterialData(Material5Scale); break;
+    case 6u: ref_texIndices = GetMaterialData(Material6TextureIndex); ref_fScale = GetMaterialData(Material6Scale); break;
+    case 7u: ref_texIndices = GetMaterialData(Material7TextureIndex); ref_fScale = GetMaterialData(Material7Scale); break;
+    case 8u: ref_texIndices = GetMaterialData(Material8TextureIndex); ref_fScale = GetMaterialData(Material8Scale); break;
+    case 9u: ref_texIndices = GetMaterialData(Material9TextureIndex); ref_fScale = GetMaterialData(Material9Scale); break;
+    case 10u: ref_texIndices = GetMaterialData(Material10TextureIndex); ref_fScale = GetMaterialData(Material10Scale); break;
+    case 11u: ref_texIndices = GetMaterialData(Material11TextureIndex); ref_fScale = GetMaterialData(Material11Scale); break;
+    case 12u: ref_texIndices = GetMaterialData(Material12TextureIndex); ref_fScale = GetMaterialData(Material12Scale); break;
+    case 13u: ref_texIndices = GetMaterialData(Material13TextureIndex); ref_fScale = GetMaterialData(Material13Scale); break;
+    case 14u: ref_texIndices = GetMaterialData(Material14TextureIndex); ref_fScale = GetMaterialData(Material14Scale); break;
+    case 15u: ref_texIndices = GetMaterialData(Material15TextureIndex); ref_fScale = GetMaterialData(Material15Scale); break;
+    case 16u: ref_texIndices = GetMaterialData(Material16TextureIndex); ref_fScale = GetMaterialData(Material16Scale); break;
+    case 17u: ref_texIndices = GetMaterialData(Material17TextureIndex); ref_fScale = GetMaterialData(Material17Scale); break;
+    case 18u: ref_texIndices = GetMaterialData(Material18TextureIndex); ref_fScale = GetMaterialData(Material18Scale); break;
+    case 19u: ref_texIndices = GetMaterialData(Material19TextureIndex); ref_fScale = GetMaterialData(Material19Scale); break;
+    case 20u: ref_texIndices = GetMaterialData(Material20TextureIndex); ref_fScale = GetMaterialData(Material20Scale); break;
+    case 21u: ref_texIndices = GetMaterialData(Material21TextureIndex); ref_fScale = GetMaterialData(Material21Scale); break;
+    case 22u: ref_texIndices = GetMaterialData(Material22TextureIndex); ref_fScale = GetMaterialData(Material22Scale); break;
+    case 23u: ref_texIndices = GetMaterialData(Material23TextureIndex); ref_fScale = GetMaterialData(Material23Scale); break;
+    case 24u: ref_texIndices = GetMaterialData(Material24TextureIndex); ref_fScale = GetMaterialData(Material24Scale); break;
+    case 25u: ref_texIndices = GetMaterialData(Material25TextureIndex); ref_fScale = GetMaterialData(Material25Scale); break;
+    case 26u: ref_texIndices = GetMaterialData(Material26TextureIndex); ref_fScale = GetMaterialData(Material26Scale); break;
+    case 27u: ref_texIndices = GetMaterialData(Material27TextureIndex); ref_fScale = GetMaterialData(Material27Scale); break;
+    case 28u: ref_texIndices = GetMaterialData(Material28TextureIndex); ref_fScale = GetMaterialData(Material28Scale); break;
+    case 29u: ref_texIndices = GetMaterialData(Material29TextureIndex); ref_fScale = GetMaterialData(Material29Scale); break;
+    case 30u: ref_texIndices = GetMaterialData(Material30TextureIndex); ref_fScale = GetMaterialData(Material30Scale); break;
+    case 31u: ref_texIndices = GetMaterialData(Material31TextureIndex); ref_fScale = GetMaterialData(Material31Scale); break;
+    default: break;
+  }
 }
 
 void InsertTopMaterial(uint matIdx, float weight, inout uint3 outMatIndices, inout float3 outWeights)
@@ -187,7 +376,7 @@ void InsertTopMaterial(uint matIdx, float weight, inout uint3 outMatIndices, ino
 
 /// Bilinearly filters decoded material weights by material id. Slot-wise interpolation is invalid
 /// because neighboring vertices may store the same material in different packed slots.
-void SampleTerrainMask(out uint2 texIndices1, out uint2 texIndices2, out uint2 texIndices3, out float3 matWeights)
+void SampleTerrainMask(out uint2 texIndices1, out uint2 texIndices2, out uint2 texIndices3, out float3 matWeights, out float3 scales)
 {
   const uint cellsPerSide = GET_PUSH_CONSTANT(HeightfieldRenderConstants, CellsPerSide);
   const uint firstVertexIdx = GET_PUSH_CONSTANT(HeightfieldRenderConstants, FirstVertexIdx);
@@ -199,21 +388,27 @@ void SampleTerrainMask(out uint2 texIndices1, out uint2 texIndices2, out uint2 t
   const uint2 p1 = min(p0 + uint2(1, 1), uint2(cellsPerSide, cellsPerSide));
   const float2 f = frac(gridPos);
 
-  float weights[8];
-  [unroll] for (uint i = 0u; i < 8u; ++i)
+  uint ids[MAX_MASK_CANDIDATES];
+  float weights[MAX_MASK_CANDIDATES];
+  [unroll] for (uint i = 0u; i < MAX_MASK_CANDIDATES; ++i)
+  {
+    ids[i] = 0u;
     weights[i] = 0.0;
+  }
+  uint count = 0u;
 
-  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p0.y * vertexIdxPitch + p0.x], (1.0 - f.x) * (1.0 - f.y), weights);
-  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p0.y * vertexIdxPitch + p1.x],        f.x  * (1.0 - f.y), weights);
-  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p1.y * vertexIdxPitch + p0.x], (1.0 - f.x) *        f.y,  weights);
-  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p1.y * vertexIdxPitch + p1.x],        f.x  *        f.y,  weights);
+  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p0.y * vertexIdxPitch + p0.x], (1.0 - f.x) * (1.0 - f.y), ids, weights, count);
+  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p0.y * vertexIdxPitch + p1.x],        f.x  * (1.0 - f.y), ids, weights, count);
+  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p1.y * vertexIdxPitch + p0.x], (1.0 - f.x) *        f.y,  ids, weights, count);
+  AccumulateMaskWeights(TerrainMask[firstVertexIdx + p1.y * vertexIdxPitch + p1.x],        f.x  *        f.y,  ids, weights, count);
 
   uint3 matIndices = uint3(0, 0, 0);
   matWeights = float3(0.0, 0.0, 0.0);
 
-  [unroll] for (uint matIdx = 0u; matIdx < 8u; ++matIdx)
+  [unroll] for (uint c = 0u; c < MAX_MASK_CANDIDATES; ++c)
   {
-    InsertTopMaterial(matIdx, weights[matIdx], matIndices, matWeights);
+    if (c < count)
+      InsertTopMaterial(ids[c], weights[c], matIndices, matWeights);
   }
 
   const float totalW = matWeights.x + matWeights.y + matWeights.z;
@@ -222,18 +417,29 @@ void SampleTerrainMask(out uint2 texIndices1, out uint2 texIndices2, out uint2 t
   else
     matWeights = float3(1.0, 0.0, 0.0);
 
-  int2 MatTextureIndices[8] = { GetMaterialData(Material0TextureIndex), GetMaterialData(Material1TextureIndex), GetMaterialData(Material2TextureIndex), GetMaterialData(Material3TextureIndex), GetMaterialData(Material4TextureIndex), GetMaterialData(Material5TextureIndex), GetMaterialData(Material6TextureIndex), GetMaterialData(Material7TextureIndex) };
-  texIndices1 = MatTextureIndices[matIndices.x];
-  texIndices2 = MatTextureIndices[matIndices.y];
-  texIndices3 = MatTextureIndices[matIndices.z];
+  const float textureScale = GetMaterialData(TextureScale);
+  int2 layerTexIndices;
+  float layerScale;
+
+  GetLayerData(matIndices.x, layerTexIndices, layerScale);
+  texIndices1 = layerTexIndices;
+  scales.x = textureScale * layerScale;
+
+  GetLayerData(matIndices.y, layerTexIndices, layerScale);
+  texIndices2 = layerTexIndices;
+  scales.y = textureScale * layerScale;
+
+  GetLayerData(matIndices.z, layerTexIndices, layerScale);
+  texIndices3 = layerTexIndices;
+  scales.z = textureScale * layerScale;
 }
 
 float SampleTerrainDisplacement(float3 worldPos)
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float h0 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic).r;
-  const float h1 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic).r;
-  const float h2 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic).r;
+  const float h0 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic).r;
+  const float h1 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic).r;
+  const float h2 = TriplanarSampleColorArray(LayerDisplacementTexture, LayerDisplacementTexture_AutoSampler, worldPos, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic).r;
 
   return h0 * G.MatWeights.x + h1 * G.MatWeights.y + h2 * G.MatWeights.z;
 }
@@ -273,8 +479,7 @@ float3 ComputeTerrainParallaxWorldPosition(float3 worldPos)
 void FillCustomGlobals()
 {
   G.TpWeights = TriplanarWeights(G.Input.Normal);
-  G.Scale = GetMaterialData(TextureScale);
-  SampleTerrainMask(G.TexIndices1, G.TexIndices2, G.TexIndices3, G.MatWeights);
+  SampleTerrainMask(G.TexIndices1, G.TexIndices2, G.TexIndices3, G.MatWeights, G.Scales);
 
   G.LayerSamplePosition = G.Input.WorldPosition;
   if (GetMaterialData(UseDisplacementTexture))
@@ -286,9 +491,9 @@ void FillCustomGlobals()
 float3 GetNormal()
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float3 n0 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic);
-  const float3 n1 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic);
-  const float3 n2 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic);
+  const float3 n0 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic);
+  const float3 n1 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic);
+  const float3 n2 = TriplanarSampleNormalArray(LayerNormalTexture, LayerNormalTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic);
 
   return normalize(n0 * G.MatWeights.x + n1 * G.MatWeights.y + n2 * G.MatWeights.z);
 }
@@ -296,9 +501,9 @@ float3 GetNormal()
 float3 GetBaseColor()
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float3 c0 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic).rgb;
-  const float3 c1 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic).rgb;
-  const float3 c2 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic).rgb;
+  const float3 c0 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic).rgb;
+  const float3 c1 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic).rgb;
+  const float3 c2 = TriplanarSampleColorArray(LayerBaseTexture, LayerBaseTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic).rgb;
 
   return c0 * G.MatWeights.x + c1 * G.MatWeights.y + c2 * G.MatWeights.z;
 }
@@ -306,9 +511,9 @@ float3 GetBaseColor()
 float GetRoughness()
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float r0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic).g;
-  const float r1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic).g;
-  const float r2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic).g;
+  const float r0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic).g;
+  const float r1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic).g;
+  const float r2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic).g;
 
   return (r0 * G.MatWeights.x + r1 * G.MatWeights.y + r2 * G.MatWeights.z) + GetMaterialData(RoughnessBias);
 }
@@ -316,9 +521,9 @@ float GetRoughness()
 float GetMetallic()
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float m0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic).b;
-  const float m1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic).b;
-  const float m2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic).b;
+  const float m0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic).b;
+  const float m1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic).b;
+  const float m2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic).b;
 
   return (m0 * G.MatWeights.x + m1 * G.MatWeights.y + m2 * G.MatWeights.z);
 }
@@ -326,9 +531,9 @@ float GetMetallic()
 float GetOcclusion()
 {
   const bool useStochastic = GetMaterialData(UseStochasticSampling);
-  const float o0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices1, useStochastic).r;
-  const float o1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices2, useStochastic).r;
-  const float o2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scale, G.TexIndices3, useStochastic).r;
+  const float o0 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.x, G.TexIndices1, useStochastic).r;
+  const float o1 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.y, G.TexIndices2, useStochastic).r;
+  const float o2 = TriplanarSampleColorArray(LayerORMTexture, LayerORMTexture_AutoSampler, G.LayerSamplePosition, G.Input.Normal, G.TpWeights, G.Scales.z, G.TexIndices3, useStochastic).r;
 
   float occlusion = o0 * G.MatWeights.x + o1 * G.MatWeights.y + o2 * G.MatWeights.z;
   if (GetMaterialData(InvertOcclusion))

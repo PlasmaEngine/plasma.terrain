@@ -2,15 +2,21 @@
 
 #include <Core/World/World.h>
 #include <Foundation/Algorithm/HashStream.h>
+#include <Foundation/Configuration/Startup.h>
 #include <Foundation/Math/Float16.h>
 #include <GameEngine/Utils/ImageDataResource.h>
+#include <RendererCore/Lights/Implementation/VirtualShadowPool.h>
+#include <RendererCore/Material/MaterialResource.h>
 #include <RendererCore/RenderContext/BindGroupBuilder.h>
 #include <RendererCore/RenderContext/RenderContext.h>
+#include <RendererCore/Textures/Texture2DResource.h>
 #include <RendererFoundation/Device/Device.h>
 #include <RendererFoundation/Resources/Buffer.h>
 #include <RendererFoundation/Resources/ReadbackHelper.h>
+#include <RendererFoundation/Resources/Texture.h>
 #include <Shaders/Terrain/Generation/HeightfieldBakeConstants.h>
 #include <Shaders/Terrain/Generation/VoxelBakeConstants.h>
+#include <Shaders/Terrain/Rendering/TerrainPublishConstants.h>
 #include <TerrainPlugin/Components/TerrainBrushBaseComponent.h>
 #include <TerrainPlugin/TerrainSystem.h>
 #include <Texture/Image/ImageUtils.h>
@@ -28,9 +34,60 @@ PL_BEGIN_STATIC_REFLECTED_ENUM(plTerrainResolution, 1)
   PL_ENUM_CONSTANT(plTerrainResolution::Res256),
   PL_ENUM_CONSTANT(plTerrainResolution::Res512),
 PL_END_STATIC_REFLECTED_ENUM;
+
+PL_BEGIN_SUBSYSTEM_DECLARATION(TerrainPlugin, TerrainPublish)
+  BEGIN_SUBSYSTEM_DEPENDENCIES
+    "Foundation",
+    "Core"
+  END_SUBSYSTEM_DEPENDENCIES
+
+  ON_HIGHLEVELSYSTEMS_STARTUP
+  {
+    plRenderWorld::GetFrameBindingEvent().AddEventHandler(&plTerrainSystem::OnFrameBindingEvent);
+  }
+
+  ON_HIGHLEVELSYSTEMS_SHUTDOWN
+  {
+    plRenderWorld::GetFrameBindingEvent().RemoveEventHandler(&plTerrainSystem::OnFrameBindingEvent);
+    plTerrainSystem::OnPluginShutdown();
+  }
+PL_END_SUBSYSTEM_DECLARATION;
 // clang-format on
 
 plDeque<plTerrainSystem*> plTerrainSystem::s_TerrainSystems;
+
+namespace
+{
+  /// A one-row table that reads as "no heightfields", bound for worlds without terrain.
+  plGALTextureHandle s_hEmptyTerrainTable;
+
+  constexpr const char* s_szTerrainBindings[] = {"TerrainTable", "TerrainAtlas", "TerrainLayerTable", "TerrainLayerBase", "TerrainLayerNormal", "TerrainLayerORM"};
+
+  plGALTextureHandle GetEmptyTerrainTable()
+  {
+    if (s_hEmptyTerrainTable.IsInvalidated())
+    {
+      plVec4 texels[TERRAIN_TABLE_ROWS];
+      plMemoryUtils::ZeroFill(texels, TERRAIN_TABLE_ROWS);
+
+      plGALTextureCreationDescription desc;
+      desc.m_uiWidth = TERRAIN_TABLE_ROWS;
+      desc.m_uiHeight = 1;
+      desc.m_Type = plGALTextureType::Texture2D;
+      desc.m_Format = plGALResourceFormat::RGBAFloat;
+      desc.m_bAllowShaderResourceView = true;
+
+      plGALSystemMemoryDescription initialData;
+      initialData.m_pData = plConstByteBlobPtr(reinterpret_cast<const plUInt8*>(texels), sizeof(texels));
+      initialData.m_uiRowPitch = sizeof(texels);
+      initialData.m_uiSlicePitch = sizeof(texels);
+
+      s_hEmptyTerrainTable = plGALDevice::GetDefaultDevice()->CreateTexture(desc, plArrayPtr<plGALSystemMemoryDescription>(&initialData, 1));
+    }
+
+    return s_hEmptyTerrainTable;
+  }
+} // namespace
 
 plTerrainSystem::plTerrainSystem(plWorld* pWorld)
   : SUPER(pWorld)
@@ -45,6 +102,7 @@ void plTerrainSystem::Initialize()
 
   m_hTerrainBakeStep1Shader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/HeightfieldTerrainBakeStep1CS.plShader");
   m_hTerrainBakeStep2Shader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/HeightfieldTerrainBakeStep2CS.plShader");
+  m_hTerrainPublishShader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/TerrainPublishCS.plShader");
   m_hVoxelBakeShader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/VoxelBakeCS.plShader");
   m_hVoxelMeshClearShader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/VoxelMeshClearCS.plShader");
   m_hVoxelSurfaceNetsPass1Shader = plResourceManager::LoadResource<plShaderResource>("Shaders/Terrain/Generation/VoxelSurfaceNetsPass1CS.plShader");
@@ -71,6 +129,8 @@ void plTerrainSystem::Deinitialize()
   {
     plRenderWorld::GetRenderEvent().RemoveEventHandler(OnRenderEvent);
   }
+
+  DestroyPublishedResources();
 
   plGALDevice* pDevice = plGALDevice::GetDefaultDevice();
   for (auto& patch : m_Patches)
@@ -143,6 +203,8 @@ plUInt32 plTerrainSystem::CreateHeightfield(plUInt32 uiCellsPerSide)
   patch.m_uiCellsPerSide = uiCellsPerSide;
   patch.m_bInUse = true;
   patch.m_bDirty = true;
+  patch.m_bPublishDirty = true;
+  m_bPublishedTableDirty = true;
 
   // Stored grid = render vertices (CellsPerSide+1) plus 4 extra rings on each side.
   // Extra rings let normals CS use correct central-differences at patch edges,
@@ -224,6 +286,9 @@ void plTerrainSystem::InternalRemoveHeightfield(plUInt32& uiIdx)
   PL_DEFAULT_DELETE(data.m_pMaskReadback);
 
   data.m_bInUse = false;
+  data.m_bPublishDirty = true;
+  data.m_hMaterial.Invalidate();
+  m_bPublishedTableDirty = true;
   data.m_bNeedsColliderReadback = false;
   data.m_bReadbackPending = false;
   data.m_bColliderDataReady = false;
@@ -237,6 +302,364 @@ plTerrainData_Heightfield& plTerrainSystem::ModifyHeightfield(plUInt32 uiIdx)
   auto& data = m_Patches[uiIdx];
   data.m_bDirty = true;
   return data;
+}
+
+void plTerrainSystem::SetHeightfieldMaterial(plUInt32 uiIdx, const plMaterialResourceHandle& hMaterial)
+{
+  m_Patches[uiIdx].m_hMaterial = hMaterial;
+}
+
+void plTerrainSystem::OnFrameBindingEvent(const plRenderWorldFrameBindingEvent& e)
+{
+  plRenderContext* pContext = e.m_pRenderContext;
+  if (pContext == nullptr)
+    return;
+
+  for (const plTerrainSystem* pSystem : s_TerrainSystems)
+  {
+    // PublishTerrain uploads the table in the same BeginRender that creates it, so a valid table has content.
+    if (pSystem->GetWorld()->GetIndex() != e.m_uiWorldIndex || pSystem->m_hPublishedTable.IsInvalidated())
+      continue;
+
+    pContext->SetFrameTexture("TerrainTable", pSystem->m_hPublishedTable);
+    pContext->SetFrameTexture("TerrainAtlas", pSystem->m_hPublishedAtlas);
+    pContext->SetFrameTexture("TerrainLayerTable", pSystem->m_hPublishedLayerTable);
+    pContext->SetFrameTexture("TerrainLayerBase", pSystem->m_hPublishedLayerBase);
+    pContext->SetFrameTexture("TerrainLayerNormal", pSystem->m_hPublishedLayerNormal);
+    pContext->SetFrameTexture("TerrainLayerORM", pSystem->m_hPublishedLayerORM);
+    return;
+  }
+
+  // Frame bindings persist on the context, so a world without terrain must replace the last world's data.
+  for (const char* szName : s_szTerrainBindings)
+    pContext->SetFrameTexture(plTempHashedString(plStringView(szName)), plGALTextureHandle());
+
+  pContext->SetFrameTexture("TerrainTable", GetEmptyTerrainTable());
+}
+
+void plTerrainSystem::OnPluginShutdown()
+{
+  if (!s_hEmptyTerrainTable.IsInvalidated())
+  {
+    if (plGALDevice* pDevice = plGALDevice::GetDefaultDevice())
+      pDevice->DestroyTexture(s_hEmptyTerrainTable);
+
+    s_hEmptyTerrainTable.Invalidate();
+  }
+}
+
+void plTerrainSystem::DestroyPublishedResources()
+{
+  plGALDevice* pDevice = plGALDevice::GetDefaultDevice();
+
+  for (plGALTextureHandle* pTexture : {&m_hPublishedAtlas, &m_hPublishedTable, &m_hPublishedLayerTable})
+  {
+    if (!pTexture->IsInvalidated())
+    {
+      pDevice->DestroyTexture(*pTexture);
+      pTexture->Invalidate();
+    }
+  }
+
+  m_hPublishedLayerBase.Invalidate();
+  m_hPublishedLayerNormal.Invalidate();
+  m_hPublishedLayerORM.Invalidate();
+  m_hPublishedMaterial.Invalidate();
+  m_uiPublishedMaterialChangeCounter = plInvalidIndex;
+  m_uiPublishedLayerFlags = 0;
+  m_uiPublishedAtlasSize = 0;
+  m_uiPublishedSlices = 0;
+  m_bPublishedTableDirty = true;
+
+  for (auto& patch : m_Patches)
+    patch.m_bPublishDirty = true;
+}
+
+void plTerrainSystem::PublishTerrain()
+{
+  plUInt32 uiAtlasSize = 0;
+  const plTerrainData_Heightfield* pMaterialPatch = nullptr;
+
+  for (const auto& patch : m_Patches)
+  {
+    if (!patch.m_bInUse)
+      continue;
+
+    uiAtlasSize = plMath::Max(uiAtlasSize, patch.m_uiCellsPerSide + 1);
+
+    if (pMaterialPatch == nullptr && patch.m_hMaterial.IsValid())
+      pMaterialPatch = &patch;
+  }
+
+  if (uiAtlasSize == 0)
+  {
+    if (!m_hPublishedTable.IsInvalidated())
+      DestroyPublishedResources();
+    return;
+  }
+
+  plGALDevice* pDevice = plGALDevice::GetDefaultDevice();
+
+  // One slice per heightfield slot, so a slot keeps its slice while others come and go.
+  const plUInt32 uiSlices = plMath::Max(4u, (m_Patches.GetCount() + 3u) & ~3u);
+  if (m_hPublishedAtlas.IsInvalidated() || uiAtlasSize > m_uiPublishedAtlasSize || uiSlices > m_uiPublishedSlices)
+  {
+    DestroyPublishedResources();
+
+    plGALTextureCreationDescription atlasDesc;
+    atlasDesc.m_uiWidth = uiAtlasSize;
+    atlasDesc.m_uiHeight = uiAtlasSize;
+    atlasDesc.m_uiArraySize = uiSlices;
+    atlasDesc.m_Type = plGALTextureType::Texture2DArray;
+    atlasDesc.m_Format = plGALResourceFormat::RGBAFloat;
+    atlasDesc.m_bAllowShaderResourceView = true;
+    atlasDesc.m_bAllowUAV = true;
+    atlasDesc.m_ResourceAccess.m_bImmutable = false;
+    m_hPublishedAtlas = pDevice->CreateTexture(atlasDesc);
+    pDevice->GetTexture(m_hPublishedAtlas)->SetDebugName("TerrainAtlas");
+
+    plGALTextureCreationDescription tableDesc;
+    tableDesc.m_uiWidth = TERRAIN_TABLE_ROWS;
+    tableDesc.m_uiHeight = 1 + uiSlices;
+    tableDesc.m_Type = plGALTextureType::Texture2D;
+    tableDesc.m_Format = plGALResourceFormat::RGBAFloat;
+    tableDesc.m_bAllowShaderResourceView = true;
+    tableDesc.m_ResourceAccess.m_bImmutable = false;
+    m_hPublishedTable = pDevice->CreateTexture(tableDesc);
+    pDevice->GetTexture(m_hPublishedTable)->SetDebugName("TerrainTable");
+
+    plGALTextureCreationDescription layerDesc = tableDesc;
+    layerDesc.m_uiWidth = TERRAIN_MAX_LAYERS;
+    layerDesc.m_uiHeight = 1;
+    m_hPublishedLayerTable = pDevice->CreateTexture(layerDesc);
+    pDevice->GetTexture(m_hPublishedLayerTable)->SetDebugName("TerrainLayerTable");
+
+    m_uiPublishedAtlasSize = uiAtlasSize;
+    m_uiPublishedSlices = uiSlices;
+  }
+
+  const plMaterialResourceHandle hMaterial = pMaterialPatch != nullptr ? pMaterialPatch->m_hMaterial : plMaterialResourceHandle();
+  bool bLayersDirty = hMaterial != m_hPublishedMaterial;
+
+  // The layer textures are looked up every frame: streaming swaps their GPU textures as mips arrive.
+  m_hPublishedLayerBase.Invalidate();
+  m_hPublishedLayerNormal.Invalidate();
+  m_hPublishedLayerORM.Invalidate();
+
+  if (hMaterial.IsValid())
+  {
+    plResourceLock<plMaterialResource> pMaterial(hMaterial, plResourceAcquireMode::AllowLoadingFallback);
+    if (pMaterial.GetAcquireResult() == plResourceAcquireResult::Final)
+    {
+      bLayersDirty |= pMaterial->GetCurrentResourceChangeCounter() != m_uiPublishedMaterialChangeCounter;
+
+      auto getArray = [&](const char* szName) -> plGALTextureHandle {
+        plTexture2DResourceHandle hTexture = pMaterial->GetTexture2DBinding(plTempHashedString(plStringView(szName)));
+        if (!hTexture.IsValid())
+          return {};
+
+        plResourceLock<plTexture2DResource> pTexture(hTexture, plResourceAcquireMode::AllowLoadingFallback);
+        if (pTexture.GetAcquireResult() != plResourceAcquireResult::Final)
+          return {};
+
+        return pTexture->GetGALTexture();
+      };
+
+      m_hPublishedLayerBase = getArray("LayerBaseTexture");
+      m_hPublishedLayerNormal = getArray("LayerNormalTexture");
+      m_hPublishedLayerORM = getArray("LayerORMTexture");
+    }
+    else
+    {
+      // Retry until the material has loaded.
+      bLayersDirty = true;
+    }
+  }
+
+  bool bAnyCopy = false;
+  for (const auto& patch : m_Patches)
+  {
+    if (patch.m_bInUse && !patch.m_bDirty && patch.m_bPublishDirty)
+      bAnyCopy = true;
+  }
+
+  if (!bAnyCopy && !bLayersDirty && !m_bPublishedTableDirty)
+    return;
+
+  PL_PROFILE_SCOPE("PublishTerrain");
+
+  plRenderContext* pRenderContext = plRenderContext::GetDefaultInstance();
+  const bool bPrevAsync = pRenderContext->GetAllowAsyncShaderLoading();
+  pRenderContext->SetAllowAsyncShaderLoading(false);
+  PL_SCOPE_EXIT(pRenderContext->SetAllowAsyncShaderLoading(bPrevAsync));
+
+  plGALCommandEncoder* pCommandEncoder = pDevice->BeginCommands("TerrainPublish");
+
+  if (bAnyCopy)
+  {
+    pRenderContext->BeginCompute("TerrainPublish");
+
+    for (plUInt32 i = 0; i < m_Patches.GetCount(); ++i)
+    {
+      plTerrainData_Heightfield& patch = m_Patches[i];
+      if (!patch.m_bInUse || patch.m_bDirty || !patch.m_bPublishDirty)
+        continue;
+
+      pRenderContext->BindShader(m_hTerrainPublishShader);
+
+      TerrainPublishConstants constants;
+      constants.VertexIdxPitch = patch.m_uiCellsPerSide + 9;
+      constants.VertexCount = patch.m_uiCellsPerSide + 1;
+      constants.Slice = i;
+      pRenderContext->SetPushConstants("TerrainPublishConstants", constants);
+
+      plBindGroupBuilder& bindGroup = pRenderContext->GetBindGroup(PL_GAL_BIND_GROUP_DRAW_CALL);
+      bindGroup.BindBuffer("BakedHeights", patch.m_hBakedHeights);
+      bindGroup.BindBuffer("BakedMask", patch.m_hBakedMask);
+      bindGroup.BindTexture("TerrainAtlasOutput", m_hPublishedAtlas);
+
+      const plUInt32 uiGroups = (constants.VertexCount + 15) / 16;
+      pRenderContext->Dispatch(uiGroups, uiGroups, 1).AssertSuccess();
+
+      patch.m_bPublishDirty = false;
+    }
+
+    pRenderContext->EndCompute();
+    m_bPublishedTableDirty = true;
+  }
+
+  if (bLayersDirty)
+  {
+    PublishLayers(pCommandEncoder);
+    m_hPublishedMaterial = hMaterial;
+    m_bPublishedTableDirty = true;
+  }
+
+  if (m_bPublishedTableDirty)
+  {
+    plDynamicArray<plVec4> texels;
+    texels.SetCount(TERRAIN_TABLE_ROWS * (1 + m_uiPublishedSlices), plVec4::MakeZero());
+
+    texels[0].Set(static_cast<float>(m_Patches.GetCount()), static_cast<float>(m_uiPublishedAtlasSize), static_cast<float>(m_uiPublishedLayerFlags), m_fPublishedRoughnessBias);
+
+    for (plUInt32 i = 0; i < m_Patches.GetCount(); ++i)
+    {
+      const plTerrainData_Heightfield& patch = m_Patches[i];
+
+      // A slot that is unused or not copied yet keeps an all-zero row, which TerrainSample.h skips.
+      if (!patch.m_bInUse || patch.m_bPublishDirty)
+        continue;
+
+      plVec4* pRow = &texels[TERRAIN_TABLE_ROWS * (1 + i)];
+
+      const plMat4 mLocalToWorld = patch.m_GlobalTransform.GetAsMat4();
+      const plMat4 mWorldToLocal = patch.m_GlobalTransform.GetInverse().GetAsMat4();
+
+      for (plUInt32 r = 0; r < 3; ++r)
+      {
+        pRow[TERRAIN_TABLE_WORLD_TO_LOCAL + r] = mWorldToLocal.GetRow(r);
+        pRow[TERRAIN_TABLE_LOCAL_TO_WORLD + r] = mLocalToWorld.GetRow(r);
+      }
+
+      pRow[TERRAIN_TABLE_PARAMS].Set(static_cast<float>(patch.m_uiCellsPerSide), patch.m_fGridSpacing, static_cast<float>(i), 1.0f);
+
+      const float fSize = static_cast<float>(patch.m_uiCellsPerSide) * patch.m_fGridSpacing;
+      plBoundingBox bounds = plBoundingBox::MakeInvalid();
+      for (plUInt32 c = 0; c < 4; ++c)
+        bounds.ExpandToInclude(patch.m_GlobalTransform.TransformPosition(plVec3((c & 1) ? fSize : 0.0f, (c & 2) ? fSize : 0.0f, 0.0f)));
+
+      pRow[TERRAIN_TABLE_BOUNDS].Set(bounds.m_vMin.x, bounds.m_vMin.y, bounds.m_vMax.x, bounds.m_vMax.y);
+    }
+
+    plBoundingBoxu32 destBox;
+    destBox.m_vMin.Set(0, 0, 0);
+    destBox.m_vMax.Set(TERRAIN_TABLE_ROWS, 1 + m_uiPublishedSlices, 1);
+
+    plGALSystemMemoryDescription memDesc;
+    memDesc.m_uiRowPitch = TERRAIN_TABLE_ROWS * sizeof(plVec4);
+    memDesc.m_pData = plMakeByteBlobPtr(texels.GetData(), texels.GetCount());
+
+    pCommandEncoder->UpdateTexture(m_hPublishedTable, plGALTextureSubresource(), destBox, memDesc);
+    m_bPublishedTableDirty = false;
+  }
+
+  pDevice->EndCommands(pCommandEncoder);
+}
+
+void plTerrainSystem::PublishLayers(plGALCommandEncoder* pCommandEncoder)
+{
+  plVec4 texels[TERRAIN_MAX_LAYERS];
+  m_uiPublishedLayerFlags = 0;
+  m_uiPublishedMaterialChangeCounter = plInvalidIndex;
+
+  plMaterialResourceHandle hMaterial;
+  for (const auto& patch : m_Patches)
+  {
+    if (patch.m_bInUse && patch.m_hMaterial.IsValid())
+    {
+      hMaterial = patch.m_hMaterial;
+      break;
+    }
+  }
+
+  float fTextureScale = 0.5f;
+  bool bStochastic = false;
+  plVec2I32 texIndices[TERRAIN_MAX_LAYERS];
+  float fLayerScales[TERRAIN_MAX_LAYERS];
+  for (plUInt32 i = 0; i < TERRAIN_MAX_LAYERS; ++i)
+  {
+    texIndices[i].SetZero();
+    fLayerScales[i] = 1.0f;
+  }
+
+  if (hMaterial.IsValid())
+  {
+    plResourceLock<plMaterialResource> pMaterial(hMaterial, plResourceAcquireMode::AllowLoadingFallback);
+    if (pMaterial.GetAcquireResult() == plResourceAcquireResult::Final)
+    {
+      m_uiPublishedMaterialChangeCounter = pMaterial->GetCurrentResourceChangeCounter();
+      m_uiPublishedLayerFlags = TERRAIN_LAYERS_PRESENT;
+
+      plVariant value = pMaterial->GetParameter("TextureScale");
+      if (value.CanConvertTo<float>())
+        fTextureScale = value.ConvertTo<float>();
+
+      value = pMaterial->GetParameter("RoughnessBias");
+      m_fPublishedRoughnessBias = value.CanConvertTo<float>() ? value.ConvertTo<float>() : 0.0f;
+
+      value = pMaterial->GetParameter("UseStochasticSampling");
+      bStochastic = value.CanConvertTo<bool>() && value.ConvertTo<bool>();
+      if (bStochastic)
+        m_uiPublishedLayerFlags |= TERRAIN_LAYERS_STOCHASTIC;
+
+      plStringBuilder sName;
+      for (plUInt32 i = 0; i < TERRAIN_MAX_LAYERS; ++i)
+      {
+        sName.SetFormat("Material{}TextureIndex", i);
+        value = pMaterial->GetParameter(plTempHashedString(sName));
+        if (value.CanConvertTo<plVec2I32>())
+          texIndices[i] = value.ConvertTo<plVec2I32>();
+
+        sName.SetFormat("Material{}Scale", i);
+        value = pMaterial->GetParameter(plTempHashedString(sName));
+        if (value.CanConvertTo<float>())
+          fLayerScales[i] = value.ConvertTo<float>();
+      }
+    }
+  }
+
+  for (plUInt32 i = 0; i < TERRAIN_MAX_LAYERS; ++i)
+    texels[i].Set(static_cast<float>(texIndices[i].x), static_cast<float>(texIndices[i].y), fTextureScale * fLayerScales[i], 0.0f);
+
+  plBoundingBoxu32 destBox;
+  destBox.m_vMin.Set(0, 0, 0);
+  destBox.m_vMax.Set(TERRAIN_MAX_LAYERS, 1, 1);
+
+  plGALSystemMemoryDescription memDesc;
+  memDesc.m_uiRowPitch = sizeof(texels);
+  memDesc.m_pData = plMakeByteBlobPtr(texels, TERRAIN_MAX_LAYERS);
+
+  pCommandEncoder->UpdateTexture(m_hPublishedLayerTable, plGALTextureSubresource(), destBox, memDesc);
 }
 
 plGALBufferHandle plTerrainSystem::GetHeightBuffer(plUInt32 uiPatchIndex) const
@@ -314,6 +737,7 @@ void plTerrainSystem::OnRenderEvent(const plRenderWorldRenderEvent& e)
   for (auto* pTerrain : s_TerrainSystems)
   {
     pTerrain->UpdateTerrain();
+    pTerrain->PublishTerrain();
   }
 }
 
@@ -647,15 +1071,65 @@ void plTerrainSystem::UpdateHeightfield(plUInt32 uiIndex, plRenderContext* pRend
   pCommandEncoder->UpdateBuffer(hSourceBuffer, 0, plArrayPtr<const plUInt8>(reinterpret_cast<const plUInt8*>(srcHeights.GetData()), srcHeights.GetCount() * sizeof(float)),
     plGALUpdateMode::AheadOfTime);
 
+  // The source mask is the painted layer map when one is assigned, else the CPU mask.
+  plDynamicArray<plUInt64> layerMask;
+  plArrayPtr<const plUInt64> sourceMask = patch.m_MaskData;
+
+  if (patch.m_hLayerImage.IsValid())
+  {
+    plResourceLock<plImageDataResource> imgLock(patch.m_hLayerImage, plResourceAcquireMode::BlockTillLoaded_NeverFail);
+    if (imgLock.GetAcquireResult() == plResourceAcquireResult::Final)
+    {
+      const plImage& img = imgLock->GetDescriptor().m_Image;
+      const plColor* pPixels = img.GetPixelPointer<plColor>();
+      const plInt32 iImgW = static_cast<plInt32>(img.GetWidth());
+      const plInt32 iImgH = static_cast<plInt32>(img.GetHeight());
+      const float fInvV = (V > 1) ? 1.0f / static_cast<float>(V - 1) : 0.0f;
+
+      layerMask.SetCount(S * S, 0ull);
+
+      for (plUInt32 sRow = 0; sRow < S; ++sRow)
+      {
+        for (plUInt32 sCol = 0; sCol < S; ++sCol)
+        {
+          const plUInt32 iRow = static_cast<plUInt32>(plMath::Clamp(static_cast<plInt32>(sRow) - 4, 0, static_cast<plInt32>(V) - 1));
+          const plUInt32 iCol = static_cast<plUInt32>(plMath::Clamp(static_cast<plInt32>(sCol) - 4, 0, static_cast<plInt32>(V) - 1));
+          const float u = patch.m_vImageOffset.x + static_cast<float>(iCol) * fInvV * patch.m_vImageSize.x;
+          const float v = patch.m_vImageOffset.y + static_cast<float>(iRow) * fInvV * patch.m_vImageSize.y;
+
+          // Layer indices cannot be interpolated, so the nearest texel is taken.
+          const plInt32 x = plMath::Clamp(static_cast<plInt32>(u * iImgW), 0, iImgW - 1);
+          const plInt32 y = plMath::Clamp(static_cast<plInt32>(v * iImgH), 0, iImgH - 1);
+          const plColor& texel = pPixels[y * iImgW + x];
+
+          auto decode = [](float fChannel, plUInt64& ref_uiIndex, plUInt64& ref_uiWeight) {
+            const plUInt32 uiValue = static_cast<plUInt32>(plMath::Clamp(fChannel, 0.0f, 1.0f) * 65535.0f + 0.5f);
+            ref_uiIndex = uiValue >> 8;
+            ref_uiWeight = uiValue & 0xFFu;
+          };
+
+          plUInt64 idx0, w0, idx1, w1, idx2, w2;
+          decode(texel.r, idx0, w0);
+          decode(texel.g, idx1, w1);
+          decode(texel.b, idx2, w2);
+
+          layerMask[sRow * S + sCol] = idx0 | (idx1 << 8) | (idx2 << 16) | (w0 << 24) | (w1 << 32) | (w2 << 40);
+        }
+      }
+
+      sourceMask = layerMask;
+    }
+  }
+
   // Upload source material mask to a transient buffer
   plGALBufferCreationDescription srcMaskDesc;
   srcMaskDesc.m_uiStructSize = sizeof(plUInt64);
-  srcMaskDesc.m_uiTotalSize = patch.m_MaskData.GetCount() * sizeof(plUInt64);
+  srcMaskDesc.m_uiTotalSize = sourceMask.GetCount() * sizeof(plUInt64);
   srcMaskDesc.m_BufferFlags = plGALBufferUsageFlags::StructuredBuffer | plGALBufferUsageFlags::ShaderResource;
   srcMaskDesc.m_ResourceAccess.m_bImmutable = false;
 
   plGALBufferHandle hSourceMask = pDevice->CreateBuffer(srcMaskDesc);
-  pCommandEncoder->UpdateBuffer(hSourceMask, 0, plArrayPtr<const plUInt8>(reinterpret_cast<const plUInt8*>(patch.m_MaskData.GetData()), patch.m_MaskData.GetCount() * sizeof(plUInt64)),
+  pCommandEncoder->UpdateBuffer(hSourceMask, 0, plArrayPtr<const plUInt8>(reinterpret_cast<const plUInt8*>(sourceMask.GetPtr()), sourceMask.GetCount() * sizeof(plUInt64)),
     plGALUpdateMode::AheadOfTime);
 
   // Dispatch covers the full stored grid including the 4-vertex border on each side.
@@ -711,6 +1185,24 @@ void plTerrainSystem::UpdateHeightfield(plUInt32 uiIndex, plRenderContext* pRend
   pDevice->DestroyBuffer(hBrushBuffer);
 
   patch.m_bDirty = false;
+  patch.m_bPublishDirty = true;
+
+  // The terrain is a static shadow caster whose shape changed in place, so the virtual shadow map's cached pages over
+  // it hold the old ground until told. Heights stay within the height image's range, moved by brushes; the box allows
+  // for brushes that cut or build well past it.
+  {
+    const float fSize = static_cast<float>(patch.m_uiCellsPerSide) * patch.m_fGridSpacing;
+    constexpr float fBrushMargin = 100.0f;
+    const plBoundingBox localBox = plBoundingBox::MakeFromMinMax(plVec3(0.0f, 0.0f, -fBrushMargin), plVec3(fSize, fSize, plMath::Max(patch.m_fHeightScale, 0.0f) + fBrushMargin));
+
+    plBoundingBox worldBox = plBoundingBox::MakeInvalid();
+    plVec3 corners[8];
+    localBox.GetCorners(corners);
+    for (const plVec3& vCorner : corners)
+      worldBox.ExpandToInclude(patch.m_GlobalTransform.TransformPosition(vCorner));
+
+    plVirtualShadowPool::InvalidateStaticCasters(GetWorld(), worldBox);
+  }
 
   if (patch.m_bNeedsColliderReadback && patch.m_pHeightReadback != nullptr)
   {
