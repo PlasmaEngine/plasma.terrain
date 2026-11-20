@@ -37,6 +37,15 @@ VS_OUT FillVoxelTerrainVertexOutput(uint vertexID)
 
   VS_OUT Output;
   Output.Position      = mul(GetWorldToScreenMatrix(), float4(worldPos, 1.0f));
+
+#if defined(USE_VELOCITY)
+  // Last frame's position uses last frame's camera and object transform; the mesh is this frame's.
+  const float4x4 lastObjectToWorld = TransformToMatrix(instanceData.LastObjectToWorld);
+  const float3 lastWorldPos = mul(lastObjectToWorld, float4(v.Position, 1.0f)).xyz;
+  Output.ScreenPosition     = Output.Position;
+  Output.LastScreenPosition = mul(GetLastWorldToScreenMatrix(), float4(lastWorldPos, 1.0f));
+#endif
+
   Output.WorldPosition = worldPos;
   Output.Normal        = worldNormal;
   Output.Tangent       = worldTangent;

@@ -51,9 +51,15 @@ public:
   void SetHalfSizeY(float fSize);                        //< [ property ]
   float GetHalfSizeY() const { return m_fHalfSizeY; }   //< [ property ]
 
+  /// Moves the height the brush shapes the ground to up (positive) or down, in metres. A road's spline brush sets a
+  /// little below zero so the ground stays under the road's surface.
+  void SetHeightOffset(float fOffset);                        //< [ property ]
+  float GetHeightOffset() const { return m_fHeightOffset; }  //< [ property ]
+
 protected:
   virtual void FillBrushSpecificProperties(plTerrainData_PointBrush& brush, float fHalfSizeX) override;
 
   plEnum<plTerrainModifyMode2D> m_eModifyMode;
   float m_fHalfSizeY = 0.0f;
+  float m_fHeightOffset = 0.0f;
 };

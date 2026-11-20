@@ -90,6 +90,12 @@ public:
   float GetHeightScale() const { return m_fHeightScale; }        // [ property ]
   void SetHeightScale(float fScale);                             // [ property ]
 
+  /// Painted layers under the brushes, sampled over the same rectangle as the height image. Each of the R, G and B
+  /// channels is one layer of the vertex as 16 bits: the layer index in the high byte, its weight in the low byte.
+  /// Layer index 255 in R makes the vertex a hole. Texels are read nearest, never interpolated.
+  void SetLayerImage(const plImageDataResourceHandle& hImage);                     // [ property ]
+  const plImageDataResourceHandle& GetLayerImage() const { return m_hLayerImage; } // [ property ]
+
   void SetEnableCollider(bool bEnable);                          // [ property ]
   bool GetEnableCollider() const { return m_bEnableCollider; }   // [ property ]
 
@@ -130,5 +136,6 @@ private:
   plVec2 m_vImageOffset = plVec2::MakeZero();
   plVec2 m_vImageSize = plVec2(1.0f);
   float m_fHeightScale = 32.0f;
+  plImageDataResourceHandle m_hLayerImage;
   bool m_bHeightImageDirty = false; ///< Set when the image resource reloads; cleared after marking the heightfield dirty.
 };

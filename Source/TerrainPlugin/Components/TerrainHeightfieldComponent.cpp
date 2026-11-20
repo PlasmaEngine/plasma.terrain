@@ -18,7 +18,7 @@
 #include <TerrainPlugin/TerrainSystem.h>
 
 // clang-format off
-PL_BEGIN_COMPONENT_TYPE(plTerrainHeightfieldComponent, 1, plComponentMode::Static)
+PL_BEGIN_COMPONENT_TYPE(plTerrainHeightfieldComponent, 2, plComponentMode::Static)
 {
   PL_BEGIN_PROPERTIES
   {
@@ -29,6 +29,7 @@ PL_BEGIN_COMPONENT_TYPE(plTerrainHeightfieldComponent, 1, plComponentMode::Stati
     PL_ACCESSOR_PROPERTY("HeightImageOffset", GetHeightImageOffset, SetHeightImageOffset),
     PL_ACCESSOR_PROPERTY("HeightImageSize", GetHeightImageSize, SetHeightImageSize)->AddAttributes(new plDefaultValueAttribute(plVec2(1.0f))),
     PL_ACCESSOR_PROPERTY("HeightScale", GetHeightScale, SetHeightScale)->AddAttributes(new plDefaultValueAttribute(32.0f), new plClampValueAttribute(0.0f, plVariant())),
+    PL_RESOURCE_ACCESSOR_PROPERTY("LayerMap", GetLayerImage, SetLayerImage)->AddAttributes(new plAssetBrowserAttribute("CompatibleAsset_Data_2D")),
     PL_ACCESSOR_PROPERTY("BaseMaterialIndex", GetMaterialIndex, SetMaterialIndex)->AddAttributes(new plClampValueAttribute(0, 31)),
     PL_ACCESSOR_PROPERTY("EnableCollider", GetEnableCollider, SetEnableCollider)->AddAttributes(new plDefaultValueAttribute(true)),
     PL_SET_ACCESSOR_PROPERTY("TerrainTags", GetTags, Reflection_SetTag, Reflection_RemoveTag)->AddAttributes(new plTagSetWidgetAttribute("Terrain")),
@@ -119,6 +120,9 @@ void plTerrainHeightfieldComponent::SerializeComponent(plWorldWriter& inout_stre
   s << m_vImageOffset;
   s << m_vImageSize;
   s << m_fHeightScale;
+
+  // version 2
+  s << m_hLayerImage;
 }
 
 void plTerrainHeightfieldComponent::DeserializeComponent(plWorldReader& inout_stream)
@@ -147,11 +151,19 @@ void plTerrainHeightfieldComponent::DeserializeComponent(plWorldReader& inout_st
   s >> m_vImageOffset;
   s >> m_vImageSize;
   s >> m_fHeightScale;
+
+  if (uiVersion >= 2)
+    s >> m_hLayerImage;
 }
 
 void plTerrainHeightfieldComponent::SetMaterial(const plMaterialResourceHandle& hMaterial)
 {
   m_hMaterial = hMaterial;
+  if (m_uiHeightfieldIndex != plInvalidIndex)
+  {
+    if (auto* pSystem = GetWorld()->GetOrCreateModule<plTerrainSystem>())
+      pSystem->SetHeightfieldMaterial(m_uiHeightfieldIndex, hMaterial);
+  }
 }
 
 void plTerrainHeightfieldComponent::SetHeightImage(const plImageDataResourceHandle& hImage)
@@ -161,6 +173,16 @@ void plTerrainHeightfieldComponent::SetHeightImage(const plImageDataResourceHand
   {
     if (auto* pSystem = GetWorld()->GetOrCreateModule<plTerrainSystem>())
       pSystem->ModifyHeightfield(m_uiHeightfieldIndex).m_hHeightImage = hImage;
+  }
+}
+
+void plTerrainHeightfieldComponent::SetLayerImage(const plImageDataResourceHandle& hImage)
+{
+  m_hLayerImage = hImage;
+  if (m_uiHeightfieldIndex != plInvalidIndex)
+  {
+    if (auto* pSystem = GetWorld()->GetOrCreateModule<plTerrainSystem>())
+      pSystem->ModifyHeightfield(m_uiHeightfieldIndex).m_hLayerImage = hImage;
   }
 }
 
@@ -245,6 +267,8 @@ void plTerrainHeightfieldComponent::OnActivated()
   data.m_vImageOffset = m_vImageOffset;
   data.m_vImageSize = m_vImageSize;
   data.m_fHeightScale = m_fHeightScale;
+  data.m_hLayerImage = m_hLayerImage;
+  pSystem->SetHeightfieldMaterial(m_uiHeightfieldIndex, m_hMaterial);
 
   TriggerLocalBoundsUpdate();
 }
@@ -508,7 +532,7 @@ void plTerrainPatchComponentManager::ResourceEventHandler(const plResourceEvent&
     plImageDataResourceHandle hResource((plImageDataResource*)e.m_pResource);
     for (auto it = GetComponents(); it.IsValid(); it.Next())
     {
-      if (it->m_hHeightImage == hResource)
+      if (it->m_hHeightImage == hResource || it->m_hLayerImage == hResource)
         it->m_bHeightImageDirty = true;
     }
   }

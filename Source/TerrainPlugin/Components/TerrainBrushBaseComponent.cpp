@@ -20,7 +20,7 @@ PL_BEGIN_ABSTRACT_COMPONENT_TYPE(plTerrainBrushBaseComponent, 1)
     PL_ACCESSOR_PROPERTY("Falloff", GetFalloff, SetFalloff)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(0.1f, 10.0f)),
     PL_ACCESSOR_PROPERTY("Noise", GetNoise, SetNoise)->AddAttributes(new plDefaultValueAttribute(0.0f), new plClampValueAttribute(0.0f, 10.0f)),
     PL_ACCESSOR_PROPERTY("NoiseScale", GetNoiseScale, SetNoiseScale)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(1.0f, 100.0f)),
-    PL_ACCESSOR_PROPERTY("MaterialIndex", GetMaterialIndex, SetMaterialIndex)->AddAttributes(new plClampValueAttribute(0, 15)),
+    PL_ACCESSOR_PROPERTY("MaterialIndex", GetMaterialIndex, SetMaterialIndex)->AddAttributes(new plClampValueAttribute(0, 31)),
     PL_ACCESSOR_PROPERTY("MaterialStrength", GetMaterialStrength, SetMaterialStrength)->AddAttributes(new plDefaultValueAttribute(0.0f), new plClampValueAttribute(0.0f, 1.0f)),
     PL_ACCESSOR_PROPERTY("AffectHeightfields", GetAffectsHeightfields, SetAffectsHeightfields)->AddAttributes(new plDefaultValueAttribute(true)),
     PL_ACCESSOR_PROPERTY("AffectVoxels", GetAffectsVoxels, SetAffectsVoxels)->AddAttributes(new plDefaultValueAttribute(true)),

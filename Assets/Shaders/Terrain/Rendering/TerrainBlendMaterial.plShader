@@ -1,0 +1,537 @@
+[PLATFORMS]
+ALL
+
+[PERMUTATIONS]
+
+BLEND_MODE
+RENDER_PASS
+OIT_PASS
+PATH_TRACED_LIGHTING
+PROBE_DIRECT_LIGHTING
+PROBE_DIRECT_LIGHTING_SELECTED
+RESTIR_DIRECT_LIGHTING
+SHADING_MODE
+TWO_SIDED
+FLIP_WINDING
+FORWARD_PASS_WRITE_DEPTH
+MSAA
+CAMERA_MODE
+SHADING_QUALITY
+SHADOW_QUALITY
+VERTEX_SKINNING
+VERTEX_PREV_POSITION
+VERTEX_COLORS
+GAMEOBJECT_VELOCITY
+VELOCITY_OUTPUT
+
+[MATERIALPARAMETER]
+
+// The parameters of DefaultMaterial (metallic-roughness workflow), so a material can switch between the two shaders
+// and keep its values, plus the terrain blending below.
+
+Permutation BLEND_MODE;
+Permutation TRANSPARENCY_SORTING;
+Permutation SHADING_MODE;
+Permutation TWO_SIDED;
+
+float2 Scale @Default(float2(1.0,1.0));
+// Texture coordinates per second the textures move by; 0 keeps them still.
+float2 UvScrollSpeed @Default(float2(0.0,0.0));
+
+bool UseDisplacementTexture @Group("Displacement");
+Texture2D DisplacementTexture @Group("Displacement");
+float HeightScale @Default(0.0) @Clamp(0.0, 10.0) @Group("Displacement");
+
+Color BaseColor @Default(Color(1.0, 1.0, 1.0)) @Group("Color");
+bool UseVertexColor @Group("Vertex Color");
+float VertexAlphaOcclusion @Default(0.0) @Clamp(0.0, 1.0) @Group("Vertex Color");
+bool UseBaseTexture @Group("Color");
+bool UseBaseStochasticTexturing @Group("Color");
+Texture2D BaseTexture @Group("Color");
+
+float MaskThreshold @Default(0.25);
+Texture2D DitherNoiseTexture @Default("{ ac614d7c-2b31-4a7b-aa0c-c5d8200b7b89 }");
+
+bool UseNormalTexture @Group("Normal");
+bool UseNormalStochasticTexturing @Group("Normal");
+Texture2D NormalTexture @Group("Normal");
+float NormalIntensity @Default(1.0) @Clamp(0.0, 4.0) @Group("Normal");
+
+bool InvertOcclusion @Group("Occlusion");
+bool UseOcclusionTexture @Group("Occlusion");
+Texture2D OcclusionTexture @Group("Occlusion");
+
+float RoughnessValue @Default(1.0) @Clamp(0.0, 2.0) @Group("Metallic-Roughness");
+bool UseRoughnessTexture @Group("Metallic-Roughness");
+Texture2D RoughnessTexture @Group("Metallic-Roughness");
+
+float MetallicValue @Default(0.0) @Clamp(0.0, 2.0) @Group("Metallic-Roughness");
+bool UseMetallicTexture @Group("Metallic-Roughness");
+Texture2D MetallicTexture @Group("Metallic-Roughness");
+
+bool UseRMATexture @Group("PackedTextures");
+bool UseORMTexture @Group("PackedTextures");
+bool UseOrmStochasticTexturing @Group("PackedTextures");
+Texture2D OrmTexture @Group("PackedTextures");
+
+Color EmissiveColor @Default(Color(0.0, 0.0, 0.0)) @Group("Emissive");
+float EmissiveIntensity @Default(1.0) @Clamp(0.0, 10000.0) @Group("Emissive") @Suffix(" nits / EV");
+enum EmissiveUnit { Nits = 0, EV100 = 1, RelativeEV = 2 };
+EmissiveUnit EmissiveUnit @Default(0) @Group("Emissive");
+bool EmissiveLighting @Default(true) @Group("Emissive");
+bool UseEmissiveTexture @Group("Emissive");
+Texture2D EmissiveTexture @Group("Emissive");
+
+/// The mesh takes the material of the terrain under it over its whole surface.
+bool UseTerrainSurface @Group("Terrain Surface");
+/// How much of the terrain's material replaces the mesh's own.
+float TerrainSurfaceAmount @Default(1.0) @Clamp(0.0, 1.0) @Group("Terrain Surface");
+
+/// The mesh fades into the terrain's material where it meets the ground.
+bool UseEdgeBlend @Group("Edge Blend");
+/// Height above the terrain, in metres, over which the mesh fades into it.
+float EdgeBlendWidth @Default(0.4) @Clamp(0.01, 20.0) @Group("Edge Blend") @Suffix(" m");
+/// Shapes the fade: above 1 keeps more of the mesh, below 1 more of the terrain.
+float EdgeBlendFalloff @Default(1.5) @Clamp(0.1, 8.0) @Group("Edge Blend");
+/// Breaks up the line of the fade.
+float EdgeBlendNoise @Default(0.35) @Clamp(0.0, 1.0) @Group("Edge Blend");
+/// How far the mesh normal bends to the terrain's inside the fade, so lighting matches across the seam.
+float EdgeBlendNormalMatch @Default(0.8) @Clamp(0.0, 1.0) @Group("Edge Blend");
+/// Moves the fade up (positive) or down (negative), in metres.
+float EdgeBlendHeightBias @Default(0.0) @Clamp(-10.0, 10.0) @Group("Edge Blend") @Suffix(" m");
+
+[MATERIALCONFIG]
+
+#include <Shaders/Materials/MaterialConfig.h>
+
+[RENDERSTATE]
+
+#include <Shaders/Materials/MaterialState.h>
+
+[MATERIALCONSTANTS]
+
+COLOR4F(BaseColor);
+COLOR4F(EmissiveColor);
+FLOAT2(Scale);
+FLOAT2(UvScrollSpeed);
+FLOAT1(MetallicValue);
+FLOAT1(RoughnessValue);
+FLOAT1(MaskThreshold);
+FLOAT1(HeightScale);
+FLOAT1(NormalIntensity);
+FLOAT1(EmissiveIntensity);
+INT1(EmissiveUnit);
+BOOL1(UseBaseTexture);
+BOOL1(UseNormalTexture);
+BOOL1(UseRoughnessTexture);
+BOOL1(UseMetallicTexture);
+BOOL1(UseEmissiveTexture);
+BOOL1(EmissiveLighting);
+BOOL1(UseOcclusionTexture);
+BOOL1(UseORMTexture);
+BOOL1(UseRMATexture);
+BOOL1(InvertOcclusion);
+BOOL1(UseDisplacementTexture);
+BOOL1(UseBaseStochasticTexturing);
+BOOL1(UseNormalStochasticTexturing);
+BOOL1(UseOrmStochasticTexturing);
+BOOL1(UseVertexColor);
+FLOAT1(VertexAlphaOcclusion);
+BOOL1(UseTerrainSurface);
+FLOAT1(TerrainSurfaceAmount);
+BOOL1(UseEdgeBlend);
+FLOAT1(EdgeBlendWidth);
+FLOAT1(EdgeBlendFalloff);
+FLOAT1(EdgeBlendNoise);
+FLOAT1(EdgeBlendNormalMatch);
+FLOAT1(EdgeBlendHeightBias);
+
+[VERTEXSHADER]
+
+#define USE_NORMAL
+#define USE_TANGENT
+#define USE_TEXCOORD0
+#define USE_WORLDPOS
+
+#if VERTEX_COLORS == TRUE
+  #define USE_COLOR0
+#endif
+
+#if GAMEOBJECT_VELOCITY
+  #define USE_VELOCITY
+#endif
+
+#if VERTEX_SKINNING
+  #define USE_SKINNING
+#endif
+
+#if RENDER_PASS == RENDER_PASS_EDITOR
+  #define USE_DEBUG_INTERPOLATOR
+#endif
+
+#include <Shaders/Materials/MaterialVertexShader.h>
+
+VS_OUT main(VS_IN Input)
+{
+  return FillVertexData(Input);
+}
+
+[PIXELSHADER]
+
+#define USE_NORMAL
+#define USE_TANGENT
+#define USE_TEXCOORD0
+#define USE_WORLDPOS
+#define USE_MATERIAL_EMISSIVE
+#define USE_MATERIAL_OCCLUSION
+#define USE_TWO_SIDED_LIGHTING
+#define USE_DECALS
+#define USE_FOG
+#define USE_SIMPLE_MATERIAL_MODEL
+#define USE_CUSTOM_DITHER_NOISE
+
+#if VERTEX_COLORS == TRUE
+  #define USE_COLOR0
+#endif
+
+#if GAMEOBJECT_VELOCITY
+  #define USE_VELOCITY
+#endif
+
+#if RENDER_PASS == RENDER_PASS_EDITOR
+  #define USE_DEBUG_INTERPOLATOR
+#endif
+
+#define MATERIAL_EMISSIVE_LIGHTING
+
+#define CUSTOM_GLOBALS \
+  float TerrainWeight;       \
+  float TerrainNormalWeight; \
+  float3 TerrainBaseColor;   \
+  float3 TerrainNormal;      \
+  float TerrainRoughness;    \
+  float TerrainMetallic;
+
+#include <Shaders/Materials/MaterialPixelShader.h>
+#include <Shaders/Terrain/TerrainSample.h>
+
+float2 GetMaterialUV()
+{
+  return G.Input.TexCoord0.xy * GetMaterialData(Scale) + GetMaterialData(UvScrollSpeed) * WorldTime;
+}
+
+Texture2D BaseTexture BIND_GROUP(BG_MATERIAL);
+SamplerState BaseTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D NormalTexture BIND_GROUP(BG_MATERIAL);
+SamplerState NormalTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D MetallicTexture BIND_GROUP(BG_MATERIAL);
+SamplerState MetallicTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D RoughnessTexture BIND_GROUP(BG_MATERIAL);
+SamplerState RoughnessTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D EmissiveTexture BIND_GROUP(BG_MATERIAL);
+SamplerState EmissiveTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D OcclusionTexture BIND_GROUP(BG_MATERIAL);
+SamplerState OcclusionTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D OrmTexture BIND_GROUP(BG_MATERIAL);
+SamplerState OrmTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D DisplacementTexture BIND_GROUP(BG_MATERIAL);
+SamplerState DisplacementTexture_AutoSampler BIND_GROUP(BG_MATERIAL);
+
+Texture2D DitherNoiseTexture BIND_GROUP(BG_MATERIAL);
+
+float4 SampleOrmMaterialTexture(float2 uv)
+{
+  return Sample(OrmTexture, OrmTexture_AutoSampler, uv, GetMaterialData(UseOrmStochasticTexturing));
+}
+
+static const min16uint NUM_PARALLAX_OCCLUSION_STEPS = 32;
+static const float NUM_PARALLAX_OCCLUSION_STEPS_RCP = 1.0 / NUM_PARALLAX_OCCLUSION_STEPS;
+
+float2 ComputeParallaxMapping(in float2 uv, in float3 viewDirection, in float scale)
+{
+  scale /= 100;
+
+  [branch]
+  if (scale <= 0.0f)
+  {
+    return uv;
+  }
+
+  float3x3 TBN = float3x3(normalize(G.Input.Tangent), normalize(G.Input.BiTangent), normalize(G.Input.Normal));
+  viewDirection = normalize(mul(TBN, viewDirection));
+
+  float curLayerHeight = 0;
+  float2 dtex = scale * viewDirection.xy * NUM_PARALLAX_OCCLUSION_STEPS_RCP;
+  float2 currentTextureCoords = uv;
+  float2 uv_dx = ddx_coarse(uv);
+  float2 uv_dy = ddy_coarse(uv);
+
+  float heightFromTexture = 1 - DisplacementTexture.SampleGrad(DisplacementTexture_AutoSampler, currentTextureCoords, uv_dx, uv_dy).r;
+  min16uint iter = 0;
+
+  [loop]
+  while (heightFromTexture > curLayerHeight && iter < NUM_PARALLAX_OCCLUSION_STEPS)
+  {
+    curLayerHeight += NUM_PARALLAX_OCCLUSION_STEPS_RCP;
+    currentTextureCoords -= dtex;
+    heightFromTexture = 1 - DisplacementTexture.SampleGrad(DisplacementTexture_AutoSampler, currentTextureCoords, uv_dx, uv_dy).r;
+    iter++;
+  }
+
+  float2 prevTCoords = currentTextureCoords + dtex;
+  float nextH = heightFromTexture - curLayerHeight;
+  float prevH = 1 - DisplacementTexture.SampleGrad(DisplacementTexture_AutoSampler, prevTCoords, uv_dx, uv_dy).r - curLayerHeight + NUM_PARALLAX_OCCLUSION_STEPS_RCP;
+  float weight = nextH / (nextH - prevH);
+
+  return mad(prevTCoords, weight, currentTextureCoords * (1.0 - weight));
+}
+
+/// Smooth value noise in [0, 1], used to break up the edge of the blend.
+float TerrainBlendNoise(float2 p)
+{
+  const float2 i = floor(p);
+  const float2 f = frac(p);
+  const float2 u = f * f * (3.0 - 2.0 * f);
+
+  const float a = frac(sin(dot(i, float2(127.1, 311.7))) * 43758.5453);
+  const float b = frac(sin(dot(i + float2(1, 0), float2(127.1, 311.7))) * 43758.5453);
+  const float c = frac(sin(dot(i + float2(0, 1), float2(127.1, 311.7))) * 43758.5453);
+  const float d = frac(sin(dot(i + float2(1, 1), float2(127.1, 311.7))) * 43758.5453);
+
+  return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+void FillCustomGlobals()
+{
+  [branch]
+  if (GetMaterialData(UseDisplacementTexture))
+  {
+    float3 direction = normalize(GetCameraPosition() - G.Input.WorldPosition.xyz);
+    G.Input.TexCoord0 = ComputeParallaxMapping(G.Input.TexCoord0, direction, GetMaterialData(HeightScale));
+  }
+
+  G.TerrainWeight = 0.0;
+  G.TerrainNormalWeight = 0.0;
+  G.TerrainBaseColor = float3(0, 0, 0);
+  G.TerrainNormal = G.Input.Normal;
+  G.TerrainRoughness = 1.0;
+  G.TerrainMetallic = 0.0;
+
+  const bool useSurface = GetMaterialData(UseTerrainSurface);
+  const bool useEdge = GetMaterialData(UseEdgeBlend);
+
+  // Both switches are material constants, so this branch is the same for every pixel of a draw.
+  [branch]
+  if (useSurface || useEdge)
+  {
+    const float3 worldPos = G.Input.WorldPosition.xyz;
+    const float3 meshNormal = normalize(G.Input.Normal);
+    const plTerrainSample terrain = SampleTerrain(worldPos);
+
+    float edge = 0.0;
+    if (useEdge && terrain.Valid)
+    {
+      const float width = GetMaterialData(EdgeBlendWidth);
+      const float noise = (TerrainBlendNoise(worldPos.xy * 3.0) + 0.5 * TerrainBlendNoise(worldPos.xy * 7.0)) / 1.5 - 0.5;
+      const float distance = terrain.Distance - GetMaterialData(EdgeBlendHeightBias) + noise * GetMaterialData(EdgeBlendNoise) * width;
+      edge = pow(saturate(1.0 - distance / width), GetMaterialData(EdgeBlendFalloff));
+    }
+
+    const float surfaceAmount = (useSurface && terrain.Valid) ? GetMaterialData(TerrainSurfaceAmount) : 0.0;
+
+    // Near the ground the terrain's own projection makes the seam invisible; elsewhere the mesh's keeps the textures
+    // straight on its steep faces.
+    const float3 projectionNormal = normalize(lerp(meshNormal, terrain.Normal, edge));
+    const plTerrainSurface surface = SampleTerrainSurface(terrain, worldPos, projectionNormal);
+
+    G.TerrainWeight = max(surfaceAmount, edge);
+    G.TerrainNormalWeight = max(surfaceAmount, edge * GetMaterialData(EdgeBlendNormalMatch));
+    G.TerrainBaseColor = surface.BaseColor;
+    G.TerrainNormal = surface.Normal;
+    G.TerrainRoughness = surface.Roughness;
+    G.TerrainMetallic = surface.Metallic;
+  }
+}
+
+float3 GetMeshNormal()
+{
+  [branch]
+  if (GetMaterialData(UseNormalTexture))
+  {
+    float3 normalTS = DecodeNormalTexture(Sample(NormalTexture, NormalTexture_AutoSampler, GetMaterialUV(), GetMaterialData(UseNormalStochasticTexturing)));
+
+    const float intensity = GetMaterialData(NormalIntensity);
+    normalTS = normalize(float3(normalTS.xy * intensity, max(normalTS.z, 0.0001f)));
+
+    return TangentToWorldSpace(normalTS);
+  }
+
+  return G.Input.Normal;
+}
+
+float3 GetNormal()
+{
+  return normalize(lerp(GetMeshNormal(), G.TerrainNormal, G.TerrainNormalWeight));
+}
+
+float3 GetBaseColor()
+{
+  float3 baseColor = GetMaterialData(BaseColor).rgb * GetInstanceData().Color.rgb;
+
+#if defined(USE_COLOR0) && VERTEX_COLORS == TRUE
+  [branch]
+  if (GetMaterialData(UseVertexColor))
+  {
+    baseColor *= SrgbToLinear(G.Input.Color0.rgb);
+  }
+#endif
+
+  [branch]
+  if (GetMaterialData(UseBaseTexture))
+  {
+    baseColor *= Sample(BaseTexture, BaseTexture_AutoSampler, GetMaterialUV(), GetMaterialData(UseBaseStochasticTexturing)).rgb;
+  }
+
+  return lerp(baseColor, G.TerrainBaseColor, G.TerrainWeight);
+}
+
+float GetMeshMetallic()
+{
+  [branch]
+  if (GetMaterialData(UseRMATexture))
+  {
+    return GetMaterialData(MetallicValue) * SampleOrmMaterialTexture(GetMaterialUV()).g;
+  }
+  else if (GetMaterialData(UseORMTexture))
+  {
+    return GetMaterialData(MetallicValue) * SampleOrmMaterialTexture(GetMaterialUV()).b;
+  }
+  else if (GetMaterialData(UseMetallicTexture))
+  {
+    return GetMaterialData(MetallicValue) * MetallicTexture.Sample(MetallicTexture_AutoSampler, GetMaterialUV()).r;
+  }
+
+  return GetMaterialData(MetallicValue);
+}
+
+float GetMetallic()
+{
+  return lerp(GetMeshMetallic(), G.TerrainMetallic, G.TerrainWeight);
+}
+
+float GetReflectance()
+{
+  return 0.5f;
+}
+
+float GetMeshRoughness()
+{
+  [branch]
+  if (GetMaterialData(UseRMATexture))
+  {
+    return GetMaterialData(RoughnessValue) * SampleOrmMaterialTexture(GetMaterialUV()).r;
+  }
+  else if (GetMaterialData(UseORMTexture))
+  {
+    return GetMaterialData(RoughnessValue) * SampleOrmMaterialTexture(GetMaterialUV()).g;
+  }
+  else if (GetMaterialData(UseRoughnessTexture))
+  {
+    return GetMaterialData(RoughnessValue) * RoughnessTexture.Sample(RoughnessTexture_AutoSampler, GetMaterialUV()).r;
+  }
+
+  return GetMaterialData(RoughnessValue);
+}
+
+float GetRoughness()
+{
+  return lerp(GetMeshRoughness(), G.TerrainRoughness, G.TerrainWeight);
+}
+
+float GetOpacity()
+{
+  float opacity = GetMaterialData(BaseColor).a * GetInstanceData().Color.a;
+
+  [branch]
+  if (GetMaterialData(UseBaseTexture))
+  {
+    opacity = Sample(BaseTexture, BaseTexture_AutoSampler, GetMaterialUV(), GetMaterialData(UseBaseStochasticTexturing)).a * GetMaterialData(BaseColor).a;
+  }
+
+#if BLEND_MODE == BLEND_MODE_MASKED
+  return opacity - GetMaterialData(MaskThreshold);
+#else
+  return opacity;
+#endif
+}
+
+float3 GetEmissiveColor()
+{
+  float3 emissive = GetMaterialData(EmissiveColor).rgb * EmissiveNits(GetMaterialData(EmissiveIntensity), GetMaterialData(EmissiveUnit));
+
+  [branch]
+  if (GetMaterialData(UseEmissiveTexture))
+  {
+    emissive *= EmissiveTexture.Sample(EmissiveTexture_AutoSampler, GetMaterialUV()).rgb;
+  }
+
+  return emissive * (1.0 - G.TerrainWeight);
+}
+
+float GetVertexOcclusion()
+{
+#if defined(USE_COLOR0) && VERTEX_COLORS == TRUE
+  return lerp(1.0, saturate(G.Input.Color0.a), GetMaterialData(VertexAlphaOcclusion));
+#else
+  return 1.0;
+#endif
+}
+
+float GetMeshOcclusion()
+{
+  float occlusion = 1.0;
+  [branch]
+  if (GetMaterialData(UseRMATexture))
+  {
+    occlusion = SampleOrmMaterialTexture(GetMaterialUV()).b;
+  }
+  else if (GetMaterialData(UseORMTexture))
+  {
+    occlusion = SampleOrmMaterialTexture(GetMaterialUV()).r;
+  }
+  else if (GetMaterialData(UseOcclusionTexture))
+  {
+    occlusion = OcclusionTexture.Sample(OcclusionTexture_AutoSampler, GetMaterialUV()).r;
+  }
+  else
+  {
+    return GetVertexOcclusion();
+  }
+
+  if (GetMaterialData(InvertOcclusion))
+  {
+    occlusion = 1.0 - occlusion;
+  }
+
+  return occlusion * GetVertexOcclusion();
+}
+
+float GetOcclusion()
+{
+  // The terrain draws without material occlusion, so the blend fades the mesh's occlusion out with it.
+  return lerp(GetMeshOcclusion(), 1.0, G.TerrainWeight);
+}
+
+float4 GetDitherNoise(float2 pixelCoord)
+{
+  uint2 noiseTextureSize;
+  DitherNoiseTexture.GetDimensions(noiseTextureSize.x, noiseTextureSize.y);
+  return DitherNoiseTexture.SampleLevel(PointSampler, pixelCoord / noiseTextureSize, 0);
+}
